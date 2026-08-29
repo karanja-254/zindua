@@ -23,11 +23,14 @@ RUN apk add --no-cache \
         icu-dev \
         libzip-dev \
         oniguruma-dev \
+        sqlite \
+        sqlite-dev \
         $PHPIZE_DEPS \
     && docker-php-ext-install -j"$(nproc)" \
         bcmath \
         intl \
         pdo_mysql \
+        pdo_sqlite \
         zip \
         opcache \
     && pecl install redis \
