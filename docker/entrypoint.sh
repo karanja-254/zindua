@@ -6,21 +6,81 @@ touch /var/www/html/database/database.sqlite
 chown -R www-data:www-data /var/www/html/database
 chmod 775 /var/www/html/database /var/www/html/database/database.sqlite
 
-has_external_db=0
-if [ -n "${DB_URL:-}" ] || [ -n "${DATABASE_URL:-}" ]; then
-    has_external_db=1
-fi
-if [ -n "${DB_HOST:-}" ] && [ "${DB_HOST}" != "127.0.0.1" ] && [ -n "${DB_DATABASE:-}" ] && [ -n "${DB_USERNAME:-}" ]; then
-    has_external_db=1
+# Render provides DATABASE_URL; Laravel's config reads DB_URL.
+if [ -z "${DB_URL:-}" ] && [ -n "${DATABASE_URL:-}" ]; then
+    export DB_URL="${DATABASE_URL}"
 fi
 
-if [ "${has_external_db}" -eq 0 ]; then
+is_loopback_host() {
+    local host="${1:-}"
+    [ -z "${host}" ] && return 0
+    [ "${host}" = "127.0.0.1" ] && return 0
+    [ "${host}" = "localhost" ] && return 0
+    [ "${host}" = "::1" ] && return 0
+    return 1
+}
+
+url_looks_loopback() {
+    local url="${1:-}"
+    case "${url}" in
+        *://127.0.0.1[:/]*|*://localhost[:/]*|*@127.0.0.1[:/]*|*@localhost[:/]*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+use_remote_db=0
+db_url="${DB_URL:-}"
+
+if [ -n "${db_url}" ] && ! url_looks_loopback "${db_url}"; then
+    case "${db_url}" in
+        postgres://*|postgresql://*|pgsql://*)
+            export DB_CONNECTION=pgsql
+            use_remote_db=1
+            ;;
+        mysql://*|mysql2://*|mariadb://*)
+            export DB_CONNECTION=mysql
+            use_remote_db=1
+            ;;
+        sqlite:*|sqlite://*)
+            export DB_CONNECTION=sqlite
+            use_remote_db=0
+            ;;
+        *)
+            use_remote_db=1
+            ;;
+    esac
+elif ! is_loopback_host "${DB_HOST:-}" && [ -n "${DB_DATABASE:-}" ] && [ -n "${DB_USERNAME:-}" ]; then
+    use_remote_db=1
+    case "${DB_CONNECTION:-}" in
+        pgsql|postgres|postgresql|mysql|mariadb) ;;
+        *) export DB_CONNECTION=pgsql ;;
+    esac
+fi
+
+if [ "${use_remote_db}" -eq 0 ]; then
     export DB_CONNECTION=sqlite
     export DB_DATABASE=/var/www/html/database/database.sqlite
     unset DB_URL || true
     unset DATABASE_URL || true
+    unset DB_HOST || true
+    unset DB_PORT || true
+    unset DB_USERNAME || true
+    unset DB_PASSWORD || true
+else
+    # A leftover sqlite path must never be used as a Postgres/MySQL database name.
+    case "${DB_DATABASE:-}" in
+        *.sqlite|*.sqlite3|*database/database.sqlite)
+            unset DB_DATABASE || true
+            ;;
+    esac
+    if [ "${DB_CONNECTION}" = "pgsql" ] && [ -z "${DB_SSLMODE:-}" ]; then
+        export DB_SSLMODE=require
+    fi
 fi
 
+php artisan config:clear >/dev/null 2>&1 || true
 php artisan config:cache
 php artisan route:cache
 php artisan view:cache

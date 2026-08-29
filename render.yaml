@@ -41,8 +41,12 @@ services:
           name: witnessvault-redis
           property: connectionString
       # Database + object storage + third-party secrets are set in the dashboard.
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_URL
+        sync: false
       - key: DB_CONNECTION
-        value: mysql
+        sync: false
       - key: DB_HOST
         sync: false
       - key: DB_PORT
@@ -108,8 +112,12 @@ services:
           type: redis
           name: witnessvault-redis
           property: connectionString
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_URL
+        sync: false
       - key: DB_CONNECTION
-        value: mysql
+        sync: false
       - key: DB_HOST
         sync: false
       - key: DB_PORT
