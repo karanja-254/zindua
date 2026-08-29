@@ -27,4 +27,8 @@ php artisan view:cache
 
 php artisan migrate --force
 
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+    php artisan telegram:set-webhook || true
+fi
+
 exec "$@"

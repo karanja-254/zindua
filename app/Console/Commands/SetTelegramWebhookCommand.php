@@ -36,7 +36,7 @@ class SetTelegramWebhookCommand extends Command
                 ->timeout(20)
                 ->post(sprintf('https://api.telegram.org/bot%s/setWebhook', $token), [
                     'url' => $url,
-                    'allowed_updates' => ['message', 'edited_message', 'channel_post'],
+                    'allowed_updates' => ['message', 'edited_message', 'channel_post', 'edited_channel_post'],
                 ]);
         } catch (\Throwable $exception) {
             $this->error('Webhook registration failed: '.$exception->getMessage());

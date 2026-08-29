@@ -183,7 +183,12 @@ class TelegramBroadcasterService
     /**
      * Send an arbitrary Telegram message without failing the caller on API errors.
      */
-    public function sendMessage(int|string $chatId, string $text, ?string $parseMode = 'Markdown'): bool
+    public function sendMessage(
+        int|string $chatId,
+        string $text,
+        ?string $parseMode = 'Markdown',
+        ?int $messageThreadId = null,
+    ): bool
     {
         $token = $this->resolveBotToken();
 
@@ -198,11 +203,15 @@ class TelegramBroadcasterService
         $payload = [
             'chat_id' => $chatId,
             'text' => $text,
-            'disable_web_page_preview' => false,
+            'disable_web_page_preview' => true,
         ];
 
         if ($parseMode !== null && $parseMode !== '') {
             $payload['parse_mode'] = $parseMode;
+        }
+
+        if ($messageThreadId !== null && $messageThreadId > 0) {
+            $payload['message_thread_id'] = $messageThreadId;
         }
 
         try {
@@ -226,7 +235,7 @@ class TelegramBroadcasterService
             ]);
 
             if ($parseMode !== null && $parseMode !== '') {
-                return $this->sendMessage($chatId, $text, null);
+                return $this->sendMessage($chatId, $text, null, $messageThreadId);
             }
 
             return false;

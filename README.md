@@ -1,27 +1,8 @@
 # ProofVault (WitnessVault)
-# Tamper-Evident Emergency Evidence Capture System
-A secure field tool for investigators to record and preserve evidence in a way that can't be quietly altered after the fact.
 
-# Access & security
+Tamper-evident emergency evidence capture system. Investigators unlock a vault with a master keycode, stream video/audio/photos into an append-only SHA-256 hash chain, and review sessions with GPS trails, AI risk scoring, and chain-of-custody exports.
 
-An investigator authenticates by unlocking a secure "vault" with a master keycode, gating who can capture or view evidence.
-# Capture
-
-Once unlocked, they stream video, audio, and photos directly into the vault.
-Every new piece of media is written to an append-only log nothing can be edited or deleted, only added.
-# Tamper evidence (the core guarantee)
-
-Each entry is fingerprinted with SHA-256 and cryptographically linked to the previous entry, forming a hash chain. If any file or record is changed after capture, the chain breaks and the tampering becomes provable.
-# Context & intelligence
-
-Captures are tagged with GPS coordinates, building a location trail of where evidence was collected and when.
-An AI risk-scoring layer flags each session or item by threat/severity level to help prioritize review.
-# Review & handoff
-
-Investigators can replay a full session — media, timestamps, GPS path, and risk scores together.
-The system generates chain-of-custody exports: verifiable reports proving who captured what, when, where, and that the evidence is intact — suitable for legal/audit use.
-
-Powered by **Laravel 12**, **React 19**, **Vite 7**, and **Tailwind CSS 4**.
+Built with **Laravel 12**, **React 19**, **Vite 7**, and **Tailwind CSS 4**.
 
 ---
 
@@ -49,18 +30,18 @@ Powered by **Laravel 12**, **React 19**, **Vite 7**, and **Tailwind CSS 4**.
 
 ## What it does
 
-ProofVault keeps media evidence safe so that it cannot be silently modified once it has been captured.
+ProofVault preserves media evidence so it cannot be quietly altered after capture.
 
-- **Capture** — the browser MediaRecorder streams video or audio in roughly 3-second chunks, and also supports one-shot photos and file uploads
-- **Hash chain** — every chunk receives both `SHA-256(bytes)` and `SHA-256(previous_cumulative + chunk_hash)`, beginning from a 64-zero genesis hash
-- **WORM policy** — any PUT / PATCH / DELETE on evidence routes returns 403, and finalized sessions refuse new chunks
-- **GPS** — lat/lng/accuracy are recorded on each chunk, and a Leaflet map renders the trail
-- **AI risk** — Gemini (with a local heuristic fallback) scores weapon / violence / acoustic distress
-- **Alerts** — a high-risk verdict can fan out to Telegram, ElevenLabs voice notes, and SMS (Africa's Talking or Twilio)
-- **Exports** — a forensic PDF (DomPDF) plus a ZIP package (`report.pdf`, `ledger.json`, `hashes.txt`, and an optional stitched MP4)
-- **Cover UI** — the login screen is disguised as a “Fruit Ninja Dojo”, and once unlocked it turns into the ProofVault control room.
+- **Capture** — browser MediaRecorder streams video or audio in ~3s chunks, or one-shot photos / file uploads
+- **Hash chain** — each chunk gets `SHA-256(bytes)` and `SHA-256(previous_cumulative + chunk_hash)`, starting from a 64-zero genesis hash
+- **WORM policy** — PUT / PATCH / DELETE on evidence routes return 403; finalized sessions reject new chunks
+- **GPS** — lat/lng/accuracy attached per chunk; Leaflet map shows the trail
+- **AI risk** — Gemini (or local heuristic fallback) scores weapon / violence / acoustic distress
+- **Alerts** — high risk can fan out to Telegram, ElevenLabs voice notes, and SMS (Africa's Talking or Twilio)
+- **Exports** — forensic PDF (DomPDF) and ZIP package (`report.pdf`, `ledger.json`, `hashes.txt`, optional stitched MP4)
+- **Cover UI** — login screen is styled as “Fruit Ninja Dojo”; after unlock it becomes the ProofVault control room.
 
-Both public routes — `/` and `/vault` — render the same vault SPA.
+Public routes: `/` and `/vault` both render the vault SPA.
 
 ---
 
@@ -81,11 +62,11 @@ Both public routes — `/` and `/vault` — render the same vault SPA.
 
 ## Requirements
 
-- PHP 8.2+ together with `pdo_sqlite` (local) or `pdo_mysql` (prod)
+- PHP 8.2+ with `pdo_sqlite` (local) or `pdo_mysql` (prod)
 - Composer 2
 - Node.js 18+ and npm
-- Recommended PHP extensions: `zip`, `intl`, and `gd` (enable them in `php.ini` on XAMPP if they are missing)
-- Optional: Redis, ffmpeg (for frame extraction and MP4 stitching), and API keys for Gemini / Telegram / ElevenLabs / SMS
+- Recommended PHP extensions: `zip`, `intl`, `gd` (enable in `php.ini` on XAMPP if missing)
+- Optional: Redis, ffmpeg (frame extraction + MP4 stitch), API keys for Gemini / Telegram / ElevenLabs / SMS
 
 ---
 
@@ -375,13 +356,13 @@ render.yaml
 
 ## Known local gotchas
 
-1. Set `EVIDENCE_DISK=local`, otherwise uploads will fail against an empty R2 config.
-2. Avoid `composer run dev` on Windows (Pail / pcntl).
-3. Enable `extension=zip` so ZIP exports (`ZipArchive`) work.
+1. Set `EVIDENCE_DISK=local` or uploads fail against empty R2 config.
+2. Skip `composer run dev` on Windows (Pail / pcntl).
+3. Enable `extension=zip` for ZIP exports (`ZipArchive`).
 4. Enable `extension=intl` if `php artisan db:show` complains.
-5. Threat / Telegram / voice features require Redis plus keys; capture still works without them.
-6. The public `session/start` route is capped at 4/day/IP, so use the authenticated session start from the UI.
-7. Mock sessions create ledger rows with no binary files — the player will report that no stream is stored.
+5. Threat / Telegram / voice need Redis + keys; capture still works without them.
+6. Public `session/start` is capped at 4/day/IP; use authenticated session start from the UI.
+7. Mock sessions create ledger rows without binary files — player will say no stream stored.
 
 ---
 
