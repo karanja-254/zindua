@@ -10,11 +10,12 @@ use App\Models\AuditLog;
 use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
 use App\Services\EvidenceHashingService;
+use App\Services\EvidenceStorageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
@@ -23,8 +24,10 @@ class EvidenceChunkController extends Controller
 {
     private const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
 
-    public function __construct(private readonly EvidenceHashingService $hashingService)
-    {
+    public function __construct(
+        private readonly EvidenceHashingService $hashingService,
+        private readonly EvidenceStorageService $storage,
+    ) {
     }
 
     /**
@@ -132,20 +135,13 @@ class EvidenceChunkController extends Controller
             $extension = strtolower((string) ($uploaded->getClientOriginalExtension() ?: $uploaded->extension() ?: 'bin'));
             $extension = preg_replace('/[^a-z0-9]/', '', $extension) ?: 'bin';
             $storagePath = sprintf('evidence/%s/%s.%s', $session->id, (string) Str::uuid(), $extension);
-            $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
             $mimeType = (string) ($uploaded->getMimeType() ?: EvidenceChunk::mimeFromExtension($extension));
 
-            $contents = file_get_contents($realPath);
-
-            if ($contents === false) {
-                return response()->json([
-                    'error' => 'Unable to read the uploaded evidence file.',
-                ], Response::HTTP_UNPROCESSABLE_ENTITY);
-            }
-
-            $stored = $disk->put($storagePath, $contents);
+            $stored = $this->storage->putFromPath($storagePath, $realPath);
 
             if ($stored === false) {
+                $this->discardEmptyUploadSession($session, $sessionId);
+
                 return response()->json([
                     'error' => 'Failed to persist evidence file to durable storage.',
                 ], Response::HTTP_UNPROCESSABLE_ENTITY);
@@ -167,22 +163,31 @@ class EvidenceChunkController extends Controller
                 $sequenceNumber = ($previous?->sequence_number ?? 0) + 1;
                 $cumulativeHash = hash('sha256', $previousCumulative.$chunkHash);
 
-                $created = EvidenceChunk::create([
+                $attributes = [
                     'session_id' => $session->id,
                     'sequence_number' => $sequenceNumber,
                     'storage_path' => $storagePath,
-                    'mime_type' => $mimeType,
                     'byte_size' => (int) $uploaded->getSize(),
                     'chunk_hash' => $chunkHash,
                     'cumulative_hash' => $cumulativeHash,
                     'captured_at' => now(),
-                ]);
+                ];
+
+                if (Schema::hasColumn('evidence_chunks', 'mime_type')) {
+                    $attributes['mime_type'] = $mimeType;
+                }
+
+                $created = EvidenceChunk::create($attributes);
 
                 $session->forceFill(['chain_hash' => $cumulativeHash])->save();
 
                 return $created;
             });
         } catch (\Throwable $exception) {
+            if (isset($session)) {
+                $this->discardEmptyUploadSession($session, $sessionId);
+            }
+
             Log::error('Direct evidence file upload failed.', [
                 'session_id' => $sessionId,
                 'error' => $exception->getMessage(),
@@ -190,7 +195,8 @@ class EvidenceChunkController extends Controller
 
             return response()->json([
                 'error' => 'Evidence file could not be stored.',
-            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+                'detail' => config('app.debug') ? $exception->getMessage() : null,
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
 
         AuditLog::create([
@@ -221,40 +227,22 @@ class EvidenceChunkController extends Controller
     /**
      * Resolve all accessible read URLs for a stored chunk.
      *
-     * R2 disks are configured with 'throw' => true which means credentials
-     * failures propagate through exists(), temporaryUrl(), and url(). Each
-     * call is independently guarded and the authenticated proxy URL is always
-     * returned as the final non-null fallback so the investigator player has
-     * something to attempt even before a signed-URL window opens.
+     * Playback always goes through the authenticated media proxy so every
+     * investigator can play the file. Signed cloud URLs expire and do not
+     * carry the Sanctum bearer token.
      *
-     * @return array{media_url: string, mime_type: string, file_type: string, signed_url: string|null}
+     * @return array{media_url: string, mime_type: string, file_type: string, signed_url: string|null, has_binary: bool}
      */
     private function chunkMediaFields(EvidenceChunk $chunk, EvidenceSession $session): array
     {
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
-        $signedUrl = null;
-
-        try {
-            $signedUrl = $disk->temporaryUrl((string) $chunk->storage_path, now()->addMinutes(5));
-        } catch (\Throwable) {
-            $signedUrl = null;
-        }
-
-        // Authenticated proxy URL always works regardless of R2 availability.
-        $proxyUrl = url('/api/v1/evidence/' . $session->id . '/chunks/' . $chunk->sequence_number . '/media');
-        $directUrl = null;
-
-        try {
-            $directUrl = $disk->url((string) $chunk->storage_path);
-        } catch (\Throwable) {
-            $directUrl = null;
-        }
+        $proxyUrl = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
 
         return [
-            'signed_url' => $signedUrl,
-            'media_url'  => $signedUrl ?? $directUrl ?? $proxyUrl,
-            'mime_type'  => $chunk->mimeType(),
-            'file_type'  => $chunk->fileType(),
+            'signed_url' => null,
+            'media_url' => $proxyUrl,
+            'mime_type' => $chunk->mimeType(),
+            'file_type' => $chunk->fileType(),
+            'has_binary' => $this->storage->exists((string) $chunk->storage_path),
         ];
     }
 
@@ -270,6 +258,19 @@ class EvidenceChunkController extends Controller
         }
 
         return EvidenceSession::findOrFail($sessionId);
+    }
+
+    private function discardEmptyUploadSession(EvidenceSession $session, string $requestedId): void
+    {
+        if ($requestedId !== '' && strtolower($requestedId) !== 'new') {
+            return;
+        }
+
+        if ($session->chunks()->exists()) {
+            return;
+        }
+
+        $session->delete();
     }
 
     /**

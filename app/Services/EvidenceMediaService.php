@@ -7,11 +7,13 @@ namespace App\Services;
 use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
 use Illuminate\Support\Facades\Process;
-use Illuminate\Support\Facades\Storage;
 use Symfony\Component\Process\ExecutableFinder;
 
 class EvidenceMediaService
 {
+    public function __construct(private readonly EvidenceStorageService $storage)
+    {
+    }
     /**
      * Build a playback manifest of short-lived signed URLs in capture order.
      *
@@ -21,17 +23,10 @@ class EvidenceMediaService
     {
         $session->loadMissing(['chunks' => fn ($query) => $query->orderBy('sequence_number')]);
 
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 's3'));
         $expiresAt = now()->addMinutes(5);
 
-        $items = $session->chunks->map(function (EvidenceChunk $chunk) use ($disk, $expiresAt): array {
-            $url = null;
-
-            try {
-                $url = $disk->temporaryUrl($chunk->storage_path, $expiresAt);
-            } catch (\Throwable) {
-                $url = null;
-            }
+        $items = $session->chunks->map(function (EvidenceChunk $chunk) use ($session): array {
+            $url = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
 
             return [
                 'sequence_number' => $chunk->sequence_number,
@@ -65,7 +60,6 @@ class EvidenceMediaService
         }
 
         $session->loadMissing(['chunks' => fn ($query) => $query->orderBy('sequence_number')]);
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 's3'));
 
         $workDir = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pvstitch_'.bin2hex(random_bytes(6));
 
@@ -87,7 +81,7 @@ class EvidenceMediaService
                 }
 
                 try {
-                    if (! $disk->exists($path)) {
+                    if (! $this->storage->exists($path)) {
                         continue;
                     }
                 } catch (\Throwable) {
@@ -97,11 +91,7 @@ class EvidenceMediaService
                 $ext = pathinfo($path, PATHINFO_EXTENSION) ?: 'bin';
                 $local = sprintf('%s%schunk_%03d.%s', $workDir, DIRECTORY_SEPARATOR, $chunk->sequence_number, $ext);
 
-                try {
-                    $contents = $disk->get($path);
-                } catch (\Throwable) {
-                    continue;
-                }
+                $contents = $this->storage->get($path);
 
                 if ($contents === null || $contents === '') {
                     continue;

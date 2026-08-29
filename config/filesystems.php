@@ -60,6 +60,13 @@ return [
             'report' => false,
         ],
 
+        'evidence_local' => [
+            'driver' => 'local',
+            'root' => storage_path('app'),
+            'throw' => false,
+            'report' => false,
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
@@ -97,7 +104,7 @@ return [
             'endpoint' => env('CLOUDFLARE_R2_ENDPOINT'),
             'use_path_style_endpoint' => env('CLOUDFLARE_R2_USE_PATH_STYLE_ENDPOINT', true),
             'bucket_endpoint' => env('CLOUDFLARE_R2_BUCKET_ENDPOINT', false),
-            'throw' => true,
+            'throw' => false,
             'report' => false,
             'visibility' => 'private',
             // WORM / Object Lock retention applied to every uploaded object.

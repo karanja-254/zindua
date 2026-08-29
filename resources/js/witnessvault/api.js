@@ -376,7 +376,18 @@ export async function uploadEvidenceFile(token, sessionId, file) {
     });
 
     if (!response.ok) {
-        throw new Error(`File upload rejected (${response.status})`);
+        let message = `File upload rejected (${response.status})`;
+        try {
+            const payload = await response.json();
+            if (payload?.error) {
+                message = String(payload.error);
+            } else if (payload?.message) {
+                message = String(payload.message);
+            }
+        } catch {
+            // Keep the status-code fallback when the body is not JSON.
+        }
+        throw new Error(message);
     }
 
     return response.json();

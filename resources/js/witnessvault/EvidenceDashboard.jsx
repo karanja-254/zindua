@@ -238,33 +238,18 @@ export default function EvidenceDashboard({ user }) {
             const payload = await getSessionDetail(token, sessionId);
             const hydrated = [];
             for (const chunk of payload.chunks ?? []) {
-                let playback = chunk.signed_url || chunk.media_url || null;
-                // Only attempt an authenticated fetch for chunks that actually
-                // have a stored binary. Skipping has_binary=false avoids 404s
-                // for mock sessions (mathematical ledger only, no object on R2).
-                if (chunk.has_binary) {
-                    const proxyUrl = `/api/v1/evidence/${sessionId}/chunks/${chunk.sequence_number}/media`;
-                    // Prefer the already-resolved media_url when it isn't the
-                    // proxy itself (i.e. it's a signed R2 URL) — use it directly.
-                    const isSignedUrl = String(chunk.media_url ?? '').startsWith('https://') &&
-                        !String(chunk.media_url ?? '').includes('/api/v1/evidence/');
-                    if (isSignedUrl && chunk.media_url) {
-                        playback = chunk.media_url;
-                    } else {
-                        const fetchUrl = String(chunk.media_url ?? '').includes('/api/v1/evidence/')
-                            ? chunk.media_url
-                            : proxyUrl;
-                        const blobUrl = await fetchAuthorizedMediaUrl(token, fetchUrl);
-                        if (blobUrl) {
-                            blobUrlsRef.current.push(blobUrl);
-                            playback = blobUrl;
-                        }
-                    }
+                const proxyUrl = `/api/v1/evidence/${sessionId}/chunks/${chunk.sequence_number}/media`;
+                let playback = null;
+                const blobUrl = await fetchAuthorizedMediaUrl(token, proxyUrl);
+                if (blobUrl) {
+                    blobUrlsRef.current.push(blobUrl);
+                    playback = blobUrl;
                 }
                 hydrated.push({
                     ...chunk,
                     playback_url: playback,
-                    media_url: playback || chunk.media_url || null,
+                    media_url: playback,
+                    has_binary: Boolean(blobUrl),
                 });
             }
             const next = { ...payload, chunks: hydrated };
@@ -882,7 +867,7 @@ export default function EvidenceDashboard({ user }) {
                                     if (!src) {
                                         return (
                                             <p className="px-6 py-10 text-center text-sm text-slate-400">
-                                                Mock session contains mathematical ledger only; no binary stream stored
+                                                No playable media for this incident. If this is a mock session, only the hash ledger was stored.
                                             </p>
                                         );
                                     }

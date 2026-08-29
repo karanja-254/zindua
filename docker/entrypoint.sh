@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p /var/www/html/database
+mkdir -p /var/www/html/database /var/www/html/storage/app/evidence /var/www/html/storage/logs
 touch /var/www/html/database/database.sqlite
-chown -R www-data:www-data /var/www/html/database
+chown -R www-data:www-data /var/www/html/database /var/www/html/storage
 chmod 775 /var/www/html/database /var/www/html/database/database.sqlite
+chmod -R 775 /var/www/html/storage
 
 # Render provides DATABASE_URL; Laravel's config reads DB_URL.
 if [ -z "${DB_URL:-}" ] && [ -n "${DATABASE_URL:-}" ]; then

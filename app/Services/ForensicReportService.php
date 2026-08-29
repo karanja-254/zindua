@@ -7,7 +7,6 @@ namespace App\Services;
 use App\Models\EvidenceSession;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use ZipArchive;
@@ -17,6 +16,10 @@ class ForensicReportService
     private const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
 
     private const EAT_TIMEZONE = 'Africa/Nairobi';
+
+    public function __construct(private readonly EvidenceStorageService $storage)
+    {
+    }
 
     /**
      * Independently recompute each chunk SHA-256 (from stored bytes when available)
@@ -186,19 +189,13 @@ class ForensicReportService
             return null;
         }
 
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 's3'));
+        $stream = $this->storage->readStream($path);
+
+        if ($stream === false) {
+            return null;
+        }
 
         try {
-            if (! $disk->exists($path)) {
-                return null;
-            }
-
-            $stream = $disk->readStream($path);
-
-            if ($stream === false) {
-                return null;
-            }
-
             $context = hash_init('sha256');
 
             try {
@@ -212,7 +209,9 @@ class ForensicReportService
                     hash_update($context, $buffer);
                 }
             } finally {
-                fclose($stream);
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
             }
 
             return hash_final($context);

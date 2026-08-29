@@ -8,7 +8,6 @@ use App\Models\EvidenceChunk;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
-use Illuminate\Support\Facades\Storage;
 use Symfony\Component\Process\ExecutableFinder;
 
 class GeminiThreatAnalysisService
@@ -16,6 +15,10 @@ class GeminiThreatAnalysisService
     private const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
     private const PROMPT = 'Analyze this image, video frame, or audio snippet for emergency safety: detect weapons, physical violence, fire, or distress. Return JSON with \'risk_level\' (\'high\', \'medium\', or \'low\'), \'confidence\' (0.0 to 1.0), and \'reason\' (concise description).';
+
+    public function __construct(private readonly EvidenceStorageService $storage)
+    {
+    }
 
     /**
      * Send a captured frame/snapshot to Gemini and return a structured risk evaluation.
@@ -169,17 +172,7 @@ class GeminiThreatAnalysisService
             return null;
         }
 
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
-
-        try {
-            if (! $disk->exists($path)) {
-                return null;
-            }
-        } catch (\Throwable) {
-            return null;
-        }
-
-        $stream = $disk->readStream($path);
+        $stream = $this->storage->readStream($path);
 
         if ($stream === false) {
             return null;

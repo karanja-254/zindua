@@ -9,7 +9,7 @@ use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 
 class EvidenceHashingService
@@ -18,6 +18,10 @@ class EvidenceHashingService
      * The genesis hash used to seed the very first link in the chain.
      */
     private const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
+
+    public function __construct(private readonly EvidenceStorageService $storage)
+    {
+    }
 
     /**
      * Stream a raw chunk to durable storage while building the tamper-evident hash chain.
@@ -62,29 +66,15 @@ class EvidenceHashingService
 
                 $extension = $this->sanitizeExtension((string) ($metadata['extension'] ?? 'bin'));
                 $storagePath = sprintf('evidence/%s/chunks/%010d.%s', $session->id, $sequenceNumber, $extension);
-                $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
 
-                $handle = fopen($temporaryPath, 'rb');
-
-                if ($handle === false) {
-                    throw new RuntimeException('Unable to reopen temporary chunk file for storage upload.');
-                }
-
-                try {
-                    $stored = $disk->put($storagePath, $handle);
-                } finally {
-                    fclose($handle);
-                }
-
-                if ($stored === false) {
+                if ($this->storage->putFromPath($storagePath, $temporaryPath) !== true) {
                     throw new RuntimeException('Failed to persist evidence chunk to durable storage.');
                 }
 
-                $chunk = EvidenceChunk::create([
+                $attributes = [
                     'session_id' => $session->id,
                     'sequence_number' => $sequenceNumber,
                     'storage_path' => $storagePath,
-                    'mime_type' => EvidenceChunk::mimeFromExtension($extension),
                     'byte_size' => $byteSize,
                     'chunk_hash' => $chunkHash,
                     'cumulative_hash' => $cumulativeHash,
@@ -92,7 +82,13 @@ class EvidenceHashingService
                     'longitude' => $metadata['longitude'] ?? null,
                     'accuracy_meters' => $metadata['accuracy_meters'] ?? null,
                     'captured_at' => $metadata['captured_at'] ?? now(),
-                ]);
+                ];
+
+                if (Schema::hasColumn('evidence_chunks', 'mime_type')) {
+                    $attributes['mime_type'] = EvidenceChunk::mimeFromExtension($extension);
+                }
+
+                $chunk = EvidenceChunk::create($attributes);
 
                 $session->forceFill(['chain_hash' => $cumulativeHash])->save();
 

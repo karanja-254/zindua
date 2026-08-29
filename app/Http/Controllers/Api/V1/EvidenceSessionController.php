@@ -10,17 +10,18 @@ use App\Models\AuditLog;
 use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
 use App\Services\EvidenceMediaService;
+use App\Services\EvidenceStorageService;
 use App\Services\ForensicReportService;
-use DateTimeInterface;
-use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 
 class EvidenceSessionController extends Controller
 {
+    public function __construct(private readonly EvidenceStorageService $storage)
+    {
+    }
     /**
      * Return paginated evidence sessions with chunk counts, newest first.
      */
@@ -221,11 +222,10 @@ class EvidenceSessionController extends Controller
             'chunks' => fn ($query) => $query->orderBy('sequence_number'),
         ])->findOrFail($sessionId);
 
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
         $expiresAt = now()->addMinutes(5);
 
-        $chunks = $session->chunks->map(function (EvidenceChunk $chunk) use ($disk, $expiresAt, $session): array {
-            return $this->serializeChunkPayload($chunk, $session, $disk, $expiresAt);
+        $chunks = $session->chunks->map(function (EvidenceChunk $chunk) use ($session): array {
+            return $this->serializeChunkPayload($chunk, $session);
         })->all();
 
         return response()->json([
@@ -359,7 +359,7 @@ class EvidenceSessionController extends Controller
     }
 
     /**
-     * Authenticated media stream for a stored chunk (local-disk / signed-URL fallback).
+     * Authenticated media stream for a stored chunk (local replica, then cloud).
      */
     public function streamChunk(string $sessionId, int $sequence): Response
     {
@@ -369,86 +369,38 @@ class EvidenceSessionController extends Controller
             ->where('sequence_number', $sequence)
             ->firstOrFail();
 
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
+        $path = (string) $chunk->storage_path;
 
-        try {
-            if (! $disk->exists($chunk->storage_path)) {
-                abort(Response::HTTP_NOT_FOUND, 'No binary stream stored for this chunk.');
-            }
-        } catch (\Throwable) {
+        if ($path === '' || ! $this->storage->exists($path)) {
             abort(Response::HTTP_NOT_FOUND, 'No binary stream stored for this chunk.');
         }
 
-        $mime = $chunk->mimeType();
-
-        return $disk->response($chunk->storage_path, basename((string) $chunk->storage_path), [
-            'Content-Type' => $mime,
-            'Cache-Control' => 'no-store, no-cache, must-revalidate, private',
-            'X-WORM-Policy' => 'read-only; evidence records are immutable',
-        ]);
+        return $this->storage->stream($path, basename($path), $chunk->mimeType());
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function serializeChunkPayload(EvidenceChunk $chunk, EvidenceSession $session, Filesystem $disk, DateTimeInterface $expiresAt): array
+    private function serializeChunkPayload(EvidenceChunk $chunk, EvidenceSession $session): array
     {
-        // R2/S3 disks configured with 'throw' => true will propagate on every
-        // storage call when credentials are invalid or the object is absent.
-        // All three operations (exists, temporaryUrl, url) must be independently
-        // guarded so a single failure does not bubble through the entire show().
-        $exists = false;
-
-        try {
-            $exists = $disk->exists((string) $chunk->storage_path);
-        } catch (\Throwable) {
-            $exists = false;
-        }
-
-        $signedUrl = null;
-
-        if ($exists) {
-            try {
-                $signedUrl = $disk->temporaryUrl((string) $chunk->storage_path, $expiresAt);
-            } catch (\Throwable) {
-                $signedUrl = null;
-            }
-        }
-
-        // Always compute the proxy URL — it works even when R2 is unreachable
-        // because it is served by this application via the streamChunk action.
-        $proxyUrl = url('/api/v1/evidence/' . $session->id . '/chunks/' . $chunk->sequence_number . '/media');
-        $directUrl = null;
-
-        if ($exists) {
-            try {
-                $directUrl = $disk->url((string) $chunk->storage_path);
-            } catch (\Throwable) {
-                $directUrl = null;
-            }
-        }
-
-        // Preference order: signed (expiring) → direct public → authenticated proxy.
-        // The proxy URL is always returned as a final fallback so the investigator
-        // player always has a URL to attempt, even for mock sessions without binaries.
-        $mediaUrl = $signedUrl ?? $directUrl ?? ($exists ? $proxyUrl : $proxyUrl);
+        $proxyUrl = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
 
         return [
-            'sequence_number'     => $chunk->sequence_number,
-            'storage_path'        => $chunk->storage_path,
-            'byte_size'           => $chunk->byte_size,
-            'chunk_hash'          => $chunk->chunk_hash,
-            'cumulative_hash'     => $chunk->cumulative_hash,
-            'captured_at'         => $chunk->captured_at,
-            'latitude'            => $chunk->latitude,
-            'longitude'           => $chunk->longitude,
-            'accuracy_meters'     => $chunk->accuracy_meters,
+            'sequence_number' => $chunk->sequence_number,
+            'storage_path' => $chunk->storage_path,
+            'byte_size' => $chunk->byte_size,
+            'chunk_hash' => $chunk->chunk_hash,
+            'cumulative_hash' => $chunk->cumulative_hash,
+            'captured_at' => $chunk->captured_at,
+            'latitude' => $chunk->latitude,
+            'longitude' => $chunk->longitude,
+            'accuracy_meters' => $chunk->accuracy_meters,
             'ai_threat_indicators' => $chunk->ai_threat_indicators,
-            'has_binary'          => $exists,
-            'signed_url'          => $signedUrl,
-            'media_url'           => $mediaUrl,
-            'mime_type'           => $chunk->mimeType(),
-            'file_type'           => $chunk->fileType(),
+            'has_binary' => $this->storage->exists((string) $chunk->storage_path),
+            'signed_url' => null,
+            'media_url' => $proxyUrl,
+            'mime_type' => $chunk->mimeType(),
+            'file_type' => $chunk->fileType(),
         ];
     }
 }
