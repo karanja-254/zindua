@@ -12,6 +12,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
 class BroadcastTelegramAlertJob implements ShouldQueue
 {
@@ -47,6 +48,13 @@ class BroadcastTelegramAlertJob implements ShouldQueue
 
     public function handle(TelegramBroadcasterService $telegram): void
     {
-        $telegram->broadcastThreatAlert($this->session, $this->chunk, $this->aiIndicators);
+        try {
+            $telegram->broadcastThreatAlert($this->session, $this->chunk, $this->aiIndicators);
+        } catch (\Throwable $exception) {
+            Log::error('BroadcastTelegramAlertJob swallowed a Telegram API error.', [
+                'session_id' => $this->session->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 }

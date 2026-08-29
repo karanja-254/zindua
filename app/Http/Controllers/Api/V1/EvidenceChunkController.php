@@ -83,6 +83,7 @@ class EvidenceChunkController extends Controller
             'cumulative_hash' => $chunk->cumulative_hash,
             'byte_size' => $chunk->byte_size,
             'storage_path' => $chunk->storage_path,
+            ...$this->chunkMediaFields($chunk, $session),
         ], Response::HTTP_CREATED);
     }
 
@@ -211,7 +212,32 @@ class EvidenceChunkController extends Controller
             'status' => 'success',
             'session_id' => $session->id,
             'chunk_id' => $chunk->id,
+            ...$this->chunkMediaFields($chunk, $session),
         ], Response::HTTP_OK);
+    }
+
+    /**
+     * @return array{media_url: string|null, mime_type: string, file_type: string, signed_url: string|null}
+     */
+    private function chunkMediaFields(EvidenceChunk $chunk, EvidenceSession $session): array
+    {
+        $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
+        $signedUrl = null;
+
+        try {
+            $signedUrl = $disk->temporaryUrl($chunk->storage_path, now()->addMinutes(5));
+        } catch (\Throwable) {
+            $signedUrl = null;
+        }
+
+        $proxyUrl = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
+
+        return [
+            'signed_url' => $signedUrl,
+            'media_url' => $signedUrl ?? $proxyUrl,
+            'mime_type' => $chunk->mimeType(),
+            'file_type' => $chunk->fileType(),
+        ];
     }
 
     private function resolveUploadSession(Request $request, string $sessionId): EvidenceSession

@@ -294,6 +294,7 @@ export async function downloadEvidencePackage(token, sessionId) {
  */
 export async function downloadReport(token, sessionId) {
     const response = await fetch(`${API_BASE}/${sessionId}/report`, {
+        method: 'GET',
         headers: {
             Accept: 'application/pdf',
             Authorization: `Bearer ${token}`,
@@ -301,18 +302,26 @@ export async function downloadReport(token, sessionId) {
     });
 
     if (!response.ok) {
-        throw new Error(`Failed to generate report (${response.status})`);
+        const payload = await response.json().catch(() => ({}));
+        const message = payload.error ?? payload.message ?? `Failed to generate report (${response.status})`;
+        throw new Error(message);
     }
 
     const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
+    if (!blob || blob.size === 0) {
+        throw new Error('Forensic PDF was empty.');
+    }
+
+    const objectUrl = window.URL.createObjectURL(blob);
     const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `proofvault-forensic-${sessionId.slice(0, 8)}.pdf`;
+    const disposition = response.headers.get('Content-Disposition') ?? '';
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    anchor.href = objectUrl;
+    anchor.download = match?.[1] ?? `proofvault-forensic-${sessionId}.pdf`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    URL.revokeObjectURL(url);
+    window.URL.revokeObjectURL(objectUrl);
 }
 
 /**
@@ -386,6 +395,7 @@ export async function overrideRiskLevel(token, sessionId, riskLevel, reason) {
         },
         body: JSON.stringify({
             risk_level: riskLevel,
+            override_reason: reason ?? 'Investigator manually overrode AI assessment.',
             reason: reason ?? 'Investigator manually overrode AI assessment.',
         }),
     });

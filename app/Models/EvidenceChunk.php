@@ -53,4 +53,44 @@ class EvidenceChunk extends Model
     {
         return $this->belongsTo(EvidenceSession::class, 'session_id');
     }
+
+    /**
+     * MIME type inferred from the stored object extension.
+     */
+    public function mimeType(): string
+    {
+        $extension = strtolower(pathinfo((string) $this->storage_path, PATHINFO_EXTENSION));
+
+        return match ($extension) {
+            'jpg', 'jpeg' => 'image/jpeg',
+            'png' => 'image/png',
+            'webp' => 'image/webp',
+            'gif' => 'image/gif',
+            'mp4' => 'video/mp4',
+            'webm' => 'video/webm',
+            'mov' => 'video/quicktime',
+            'mp3' => 'audio/mpeg',
+            'wav' => 'audio/wav',
+            'ogg' => 'audio/ogg',
+            'm4a', 'aac' => 'audio/mp4',
+            'pdf' => 'application/pdf',
+            default => 'application/octet-stream',
+        };
+    }
+
+    /**
+     * Coarse media category used by the investigator player.
+     */
+    public function fileType(): string
+    {
+        $mime = $this->mimeType();
+
+        return match (true) {
+            str_starts_with($mime, 'video/') => 'video',
+            str_starts_with($mime, 'image/') => 'image',
+            str_starts_with($mime, 'audio/') => 'audio',
+            $mime === 'application/pdf' => 'pdf',
+            default => 'document',
+        };
+    }
 }

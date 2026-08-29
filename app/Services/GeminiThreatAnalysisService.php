@@ -15,7 +15,7 @@ class GeminiThreatAnalysisService
 {
     private const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
-    private const PROMPT = 'Analyze this image for emergency safety: detect weapons, physical violence, fire, or distress. Return JSON with \'risk_level\' (\'high\', \'medium\', or \'low\'), \'confidence\' (0.0 to 1.0), and \'reason\' (concise description).';
+    private const PROMPT = 'Analyze this image, video frame, or audio snippet for emergency safety: detect weapons, physical violence, fire, or distress. Return JSON with \'risk_level\' (\'high\', \'medium\', or \'low\'), \'confidence\' (0.0 to 1.0), and \'reason\' (concise description).';
 
     /**
      * Send a captured frame/snapshot to Gemini and return a structured risk evaluation.
@@ -24,13 +24,13 @@ class GeminiThreatAnalysisService
      */
     public function analyzeChunk(EvidenceChunk $chunk): ?array
     {
-        $key = config('services.gemini.key');
+        $key = config('services.gemini.api_key') ?: config('services.gemini.key');
 
         if (! is_string($key) || $key === '') {
             return null;
         }
 
-        $frame = $this->extractImageFrame($chunk);
+        $frame = $this->extractMediaPayload($chunk);
 
         if ($frame === null) {
             return null;
@@ -157,9 +157,11 @@ class GeminiThreatAnalysisService
     }
 
     /**
+     * Fetch the stored object from R2/S3 and return an image frame, audio snippet, or still.
+     *
      * @return array{mime: string, bytes: string}|null
      */
-    private function extractImageFrame(EvidenceChunk $chunk): ?array
+    private function extractMediaPayload(EvidenceChunk $chunk): ?array
     {
         $path = (string) $chunk->storage_path;
 
@@ -167,7 +169,7 @@ class GeminiThreatAnalysisService
             return null;
         }
 
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 's3'));
+        $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
 
         try {
             if (! $disk->exists($path)) {
@@ -191,6 +193,18 @@ class GeminiThreatAnalysisService
                 $rest = (string) stream_get_contents($stream);
 
                 return ['mime' => $imageMime, 'bytes' => $header.$rest];
+            }
+
+            $audioMime = $this->detectAudioMime($header, (string) $chunk->storage_path);
+
+            if ($audioMime !== null) {
+                $rest = (string) stream_get_contents($stream);
+                $bytes = $header.$rest;
+                if (strlen($bytes) > 4_000_000) {
+                    $bytes = substr($bytes, 0, 4_000_000);
+                }
+
+                return ['mime' => $audioMime, 'bytes' => $bytes];
             }
 
             return $this->extractVideoFrame($header, $stream);
@@ -273,6 +287,36 @@ class GeminiThreatAnalysisService
 
         if (str_starts_with($header, 'RIFF') && str_contains(substr($header, 0, 16), 'WEBP')) {
             return 'image/webp';
+        }
+
+        return null;
+    }
+
+    private function detectAudioMime(string $header, string $path): ?string
+    {
+        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+
+        if (in_array($extension, ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'], true)) {
+            return match ($extension) {
+                'mp3' => 'audio/mpeg',
+                'wav' => 'audio/wav',
+                'ogg' => 'audio/ogg',
+                'm4a', 'aac' => 'audio/mp4',
+                'flac' => 'audio/flac',
+                default => 'audio/mpeg',
+            };
+        }
+
+        if (str_starts_with($header, 'ID3') || (strlen($header) >= 2 && $header[0] === "\xFF" && (ord($header[1]) & 0xE0) === 0xE0)) {
+            return 'audio/mpeg';
+        }
+
+        if (str_starts_with($header, 'RIFF') && str_contains(substr($header, 0, 16), 'WAVE')) {
+            return 'audio/wav';
+        }
+
+        if (str_starts_with($header, 'OggS')) {
+            return 'audio/ogg';
         }
 
         return null;

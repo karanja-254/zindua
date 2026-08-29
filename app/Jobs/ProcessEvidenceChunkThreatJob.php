@@ -31,13 +31,6 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
      */
     public int $timeout = 120;
 
-    /**
-     * Risk tiers that warrant an immediate multi-channel broadcast.
-     *
-     * @var list<string>
-     */
-    private const ESCALATION_TIERS = ['high', 'medium'];
-
     public function __construct(public readonly EvidenceChunk $chunk)
     {
         $this->onConnection('redis')->onQueue('threat-analysis');
@@ -71,14 +64,15 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
         }
 
         $analysis = $this->assessThreat($chunk, $gemini);
-        $riskLevel = $analysis['risk_level'];
-        $reason = $analysis['reason'];
-        $confidence = $analysis['confidence'];
         $indicators = [
             'weapon' => $analysis['weapon'],
             'violence' => $analysis['violence'],
             'acoustic_distress' => $analysis['acoustic_distress'],
         ];
+        $peakScore = max($indicators['weapon'], $indicators['violence'], $indicators['acoustic_distress'], $analysis['confidence']);
+        $riskLevel = $peakScore >= 0.70 ? 'high' : $analysis['risk_level'];
+        $reason = $analysis['reason'];
+        $confidence = $analysis['confidence'];
 
         $payload = [
             ...$indicators,
@@ -91,23 +85,29 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
 
         $chunk->forceFill(['ai_threat_indicators' => $payload])->save();
 
-        if (! in_array($riskLevel, self::ESCALATION_TIERS, true)) {
+        if ($riskLevel === 'medium') {
+            $this->escalateSessionRisk($session, 'medium');
+
             return;
         }
-
-        $this->escalateSessionRisk($session, $riskLevel);
 
         if ($riskLevel !== 'high') {
             return;
         }
 
-        Bus::chain([
-            new BroadcastTelegramAlertJob($session->fresh() ?? $session, $chunk, $payload),
-            new DispatchVoiceBriefingJob($session, $chunk, $indicators),
-        ])
-            ->onConnection('redis')
-            ->onQueue('threat-analysis')
-            ->dispatch();
+        $this->escalateSessionRisk($session, 'high');
+
+        try {
+            BroadcastTelegramAlertJob::dispatch($session->fresh() ?? $session, $chunk, $payload);
+            Bus::chain([
+                new DispatchVoiceBriefingJob($session, $chunk, $indicators),
+            ])
+                ->onConnection('redis')
+                ->onQueue('threat-analysis')
+                ->dispatch();
+        } catch (\Throwable) {
+            // Queue/API failures must not unwind chunk ingest.
+        }
     }
 
     /**
@@ -117,7 +117,7 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
      */
     private function assessThreat(EvidenceChunk $chunk, GeminiThreatAnalysisService $gemini): array
     {
-        $key = config('services.gemini.key');
+        $key = config('services.gemini.api_key') ?: config('services.gemini.key');
 
         if (is_string($key) && $key !== '') {
             $evaluation = $gemini->analyzeChunk($chunk);
@@ -169,7 +169,7 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
         $peak = max($indicators);
 
         return match (true) {
-            $peak >= 0.85 => 'high',
+            $peak >= 0.70 => 'high',
             $peak >= 0.6 => 'medium',
             $peak >= 0.3 => 'low',
             default => 'unassessed',

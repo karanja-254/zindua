@@ -37,6 +37,7 @@ return [
 
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),
+        'channel_id' => env('TELEGRAM_CHANNEL_ID'),
         'channels' => array_values(array_filter(
             explode(',', (string) env('TELEGRAM_ALERT_CHANNELS', '')),
         )),
@@ -52,6 +53,7 @@ return [
 
     'gemini' => [
         'key' => env('GEMINI_API_KEY'),
+        'api_key' => env('GEMINI_API_KEY'),
     ],
 
     'sms' => [

@@ -58,22 +58,27 @@ function Badge({ value, styles }) {
     );
 }
 
-function mediaKind(path) {
-    const lower = String(path ?? '').toLowerCase();
-    if (/\.(jpe?g|png|webp|gif)$/i.test(lower)) {
+function mediaKind(chunk) {
+    const mime = String(chunk?.mime_type ?? '').toLowerCase();
+    const type = String(chunk?.file_type ?? '').toLowerCase();
+    const lower = String(chunk?.storage_path ?? chunk ?? '').toLowerCase();
+    if (mime.startsWith('image/') || type === 'image' || /\.(jpe?g|png|webp|gif)$/i.test(lower)) {
         return 'image';
     }
-    if (/\.(mp3|wav|m4a|ogg|aac)$/i.test(lower)) {
+    if (mime.startsWith('audio/') || type === 'audio' || /\.(mp3|wav|m4a|ogg|aac)$/i.test(lower)) {
         return 'audio';
     }
-    if (/\.(pdf|docx?|txt)$/i.test(lower)) {
+    if (mime === 'application/pdf' || type === 'pdf' || type === 'document' || /\.(pdf|docx?|txt)$/i.test(lower)) {
         return 'document';
+    }
+    if (mime.startsWith('video/') || type === 'video' || /\.(mp4|webm)$/i.test(lower)) {
+        return 'video';
     }
     return 'video';
 }
 
 function chunkPlaybackUrl(chunk) {
-    return chunk?.playback_url || chunk?.signed_url || '';
+    return chunk?.playback_url || chunk?.media_url || chunk?.signed_url || '';
 }
 
 export default function EvidenceDashboard({ user }) {
@@ -103,8 +108,10 @@ export default function EvidenceDashboard({ user }) {
     const captureRef = useRef(capture);
     captureRef.current = capture;
     const videoRef = useRef(null);
+    const viewfinderRef = useRef(null);
     const fileInputRef = useRef(null);
     const blobUrlsRef = useRef([]);
+    const [isViewfinderFullscreen, setIsViewfinderFullscreen] = useState(false);
     const nextPlayable = useMemo(() => {
         if (!detail || !activeChunk) {
             return null;
@@ -224,24 +231,29 @@ export default function EvidenceDashboard({ user }) {
             const payload = await getSessionDetail(token, sessionId);
             const hydrated = [];
             for (const chunk of payload.chunks ?? []) {
-                if (chunk.signed_url) {
-                    hydrated.push({ ...chunk, playback_url: chunk.signed_url });
-                    continue;
-                }
-                if (chunk.has_binary && chunk.media_url) {
-                    const blobUrl = await fetchAuthorizedMediaUrl(token, chunk.media_url);
+                let playback = chunk.signed_url || chunk.media_url || null;
+                if (chunk.has_binary) {
+                    const proxyUrl = `/api/v1/evidence/${sessionId}/chunks/${chunk.sequence_number}/media`;
+                    const fetchUrl = String(chunk.media_url ?? '').includes('/api/v1/evidence/')
+                        ? chunk.media_url
+                        : proxyUrl;
+                    const blobUrl = await fetchAuthorizedMediaUrl(token, fetchUrl);
                     if (blobUrl) {
                         blobUrlsRef.current.push(blobUrl);
+                        playback = blobUrl;
                     }
-                    hydrated.push({ ...chunk, playback_url: blobUrl });
-                    continue;
                 }
-                hydrated.push({ ...chunk, playback_url: null });
+                hydrated.push({
+                    ...chunk,
+                    playback_url: playback,
+                    media_url: playback || chunk.media_url || null,
+                });
             }
             const next = { ...payload, chunks: hydrated };
             setDetail(next);
-            const firstPlayable = hydrated.find((ch) => chunkPlaybackUrl(ch));
-            setActiveChunk(firstPlayable ?? (hydrated[0] ?? null));
+            const playable = hydrated.filter((ch) => chunkPlaybackUrl(ch));
+            const latest = playable.length > 0 ? playable[playable.length - 1] : (hydrated[hydrated.length - 1] ?? null);
+            setActiveChunk(latest);
         } catch (err) {
             setError(err.message);
         } finally {
@@ -249,7 +261,7 @@ export default function EvidenceDashboard({ user }) {
         }
     }, [lock]);
 
-    const handleDownload = useCallback(async (sessionId) => {
+    const handleDownloadPdf = useCallback(async (sessionId) => {
         const token = tokenRef.current;
         if (!token) {
             lock();
@@ -259,7 +271,7 @@ export default function EvidenceDashboard({ user }) {
         try {
             await downloadReport(token, sessionId);
         } catch (err) {
-            setError(err.message);
+            setError(err.message || 'Failed to fetch forensic PDF.');
         } finally {
             setDownloading(false);
         }
@@ -315,6 +327,36 @@ export default function EvidenceDashboard({ user }) {
         await loadSessions();
     }, [capture, loadSessions]);
 
+    const toggleFullScreen = useCallback(() => {
+        const node = viewfinderRef.current;
+        if (!node) {
+            return;
+        }
+        const doc = document;
+        const active = doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement;
+        if (active) {
+            const exit = doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+            exit?.call(doc);
+            return;
+        }
+        const request = node.requestFullscreen || node.webkitRequestFullscreen || node.msRequestFullscreen;
+        request?.call(node);
+    }, []);
+
+    useEffect(() => {
+        const onChange = () => {
+            const doc = document;
+            const active = doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement;
+            setIsViewfinderFullscreen(active === viewfinderRef.current);
+        };
+        document.addEventListener('fullscreenchange', onChange);
+        document.addEventListener('webkitfullscreenchange', onChange);
+        return () => {
+            document.removeEventListener('fullscreenchange', onChange);
+            document.removeEventListener('webkitfullscreenchange', onChange);
+        };
+    }, []);
+
     const handleUploadFile = useCallback(async (event) => {
         const file = event.target.files?.[0];
         event.target.value = '';
@@ -341,21 +383,22 @@ export default function EvidenceDashboard({ user }) {
         if (!token || !detail) {
             return;
         }
-        const reason = window.prompt('Reason for override (optional):');
-        if (reason === null) {
-            return;
-        }
+        const previous = detail.session.risk_level;
+        setDetail((prev) => (prev ? { ...prev, session: { ...prev.session, risk_level: riskLevel } } : prev));
+        setSessions((prev) => prev.map((session) => (
+            session.id === detail.session.id ? { ...session, risk_level: riskLevel } : session
+        )));
         setOverriding(true);
         try {
-            await overrideRiskLevel(token, detail.session.id, riskLevel, reason || undefined);
+            await overrideRiskLevel(token, detail.session.id, riskLevel, 'Investigator amended AI risk assessment.');
             await loadSessions();
-            await openSession(detail.session.id);
         } catch (err) {
+            setDetail((prev) => (prev ? { ...prev, session: { ...prev.session, risk_level: previous } } : prev));
             setError(err.message);
         } finally {
             setOverriding(false);
         }
-    }, [detail, loadSessions, openSession]);
+    }, [detail, loadSessions]);
 
     const handleVerify = useCallback(async () => {
         if (!detail) {
@@ -396,7 +439,7 @@ export default function EvidenceDashboard({ user }) {
         if (!continuousPlayback || !activeChunk) {
             return undefined;
         }
-        if (mediaKind(activeChunk.storage_path) !== 'image') {
+        if (mediaKind(activeChunk) !== 'image') {
             return undefined;
         }
         const timer = window.setTimeout(() => playNextChunk(), 2500);
@@ -527,7 +570,7 @@ export default function EvidenceDashboard({ user }) {
                         </p>
                     )}
                     {capture.isRecording && capture.mode === 'video' && (
-                        <div className="relative overflow-hidden rounded-xl bg-black">
+                        <div ref={viewfinderRef} className="relative overflow-hidden rounded-xl bg-black [:fullscreen]:h-screen [:fullscreen]:w-screen">
                             <video
                                 ref={videoRef}
                                 autoPlay
@@ -535,10 +578,32 @@ export default function EvidenceDashboard({ user }) {
                                 playsInline
                                 className="aspect-video w-full object-cover"
                             />
-                            <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-md bg-black/70 px-3 py-1 font-mono text-sm font-black text-red-400">
+                            <span className="absolute left-3 top-3 z-10 inline-flex items-center gap-2 rounded-md bg-black/70 px-3 py-1 font-mono text-sm font-black text-red-400">
                                 <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-red-500" />
                                 ● REC {formatElapsed(capture.elapsedMs)}
                             </span>
+                            <button
+                                type="button"
+                                onClick={toggleFullScreen}
+                                aria-label={isViewfinderFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                                className="absolute right-3 top-3 z-10 rounded-md bg-black/70 px-2 py-1 text-lg text-white hover:bg-black/90"
+                            >
+                                {isViewfinderFullscreen ? '🗗' : '⛶'}
+                            </button>
+                            <div className="absolute bottom-3 left-3 right-3 z-10 flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-mono text-xs text-slate-200">
+                                    Chunk #{String(capture.chunkCount).padStart(3, '0')}
+                                    {' · '}
+                                    {capture.uploadStatus === 'ok' ? 'Uploaded' : capture.uploadStatus === 'queued' ? 'Queued offline' : capture.uploadStatus === 'uploading' ? 'Uploading…' : 'Ready'}
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={handleStopCapture}
+                                    className="rounded-lg bg-red-600 px-4 py-2 text-sm font-black text-white shadow hover:bg-red-500"
+                                >
+                                    Stop &amp; Finalize Evidence
+                                </button>
+                            </div>
                         </div>
                     )}
                     {capture.isRecording && capture.mode === 'audio' && (
@@ -560,23 +625,27 @@ export default function EvidenceDashboard({ user }) {
                     )}
                     {capture.isRecording && (
                         <>
-                            <p className={`font-mono text-xs ${c.muted}`}>
-                                Chunk #{String(capture.chunkCount).padStart(3, '0')}
-                                {' · '}
-                                {capture.uploadStatus === 'ok' ? 'Uploaded' : capture.uploadStatus === 'queued' ? 'Queued offline' : capture.uploadStatus === 'uploading' ? 'Uploading…' : 'Ready'}
-                                {' · '}
-                                {capture.lastGeo?.latitude != null
-                                    ? `Lat ${capture.lastGeo.latitude.toFixed(4)}, Lng ${capture.lastGeo.longitude.toFixed(4)} (±${Math.round(capture.lastGeo.accuracy ?? 0)}m)`
-                                    : 'Acquiring GPS…'}
-                            </p>
+                            {capture.mode !== 'video' && (
+                                <p className={`font-mono text-xs ${c.muted}`}>
+                                    Chunk #{String(capture.chunkCount).padStart(3, '0')}
+                                    {' · '}
+                                    {capture.uploadStatus === 'ok' ? 'Uploaded' : capture.uploadStatus === 'queued' ? 'Queued offline' : capture.uploadStatus === 'uploading' ? 'Uploading…' : 'Ready'}
+                                    {' · '}
+                                    {capture.lastGeo?.latitude != null
+                                        ? `Lat ${capture.lastGeo.latitude.toFixed(4)}, Lng ${capture.lastGeo.longitude.toFixed(4)} (±${Math.round(capture.lastGeo.accuracy ?? 0)}m)`
+                                        : 'Acquiring GPS…'}
+                                </p>
+                            )}
                             <div className="flex flex-wrap gap-2">
-                                <button
-                                    type="button"
-                                    onClick={handleStopCapture}
-                                    className="rounded-lg bg-red-600 px-4 py-2 text-sm font-black text-white shadow hover:bg-red-500"
-                                >
-                                    Stop &amp; Finalize Evidence
-                                </button>
+                                {capture.mode !== 'video' && (
+                                    <button
+                                        type="button"
+                                        onClick={handleStopCapture}
+                                        className="rounded-lg bg-red-600 px-4 py-2 text-sm font-black text-white shadow hover:bg-red-500"
+                                    >
+                                        Stop &amp; Finalize Evidence
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     onClick={capture.simulateSeizure}
@@ -708,7 +777,7 @@ export default function EvidenceDashboard({ user }) {
                                 <div className="flex flex-wrap gap-2">
                                     <button
                                         type="button"
-                                        onClick={() => handleDownload(detail.session.id)}
+                                        onClick={() => handleDownloadPdf(detail.session.id)}
                                         disabled={downloading}
                                         className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white shadow transition hover:bg-emerald-500 disabled:opacity-60"
                                     >
@@ -741,7 +810,7 @@ export default function EvidenceDashboard({ user }) {
                                 </div>
                                 {(() => {
                                     const src = chunkPlaybackUrl(activeChunk);
-                                    const kind = mediaKind(activeChunk?.storage_path);
+                                    const kind = mediaKind(activeChunk);
                                     if (!src) {
                                         return (
                                             <p className="px-6 py-10 text-center text-sm text-slate-400">
@@ -750,26 +819,27 @@ export default function EvidenceDashboard({ user }) {
                                         );
                                     }
                                     if (kind === 'image') {
-                                        return <img src={src} alt="Evidence snapshot" className="max-h-[420px] w-full object-contain" />;
+                                        return <img src={activeChunk.media_url || src} alt="Evidence" className="h-full max-h-[420px] w-full object-contain" />;
                                     }
                                     if (kind === 'audio') {
                                         return (
                                             <audio
                                                 key={activeChunk.sequence_number}
-                                                src={src}
+                                                src={activeChunk.media_url || src}
                                                 controls
                                                 autoPlay={continuousPlayback}
                                                 onEnded={playNextChunk}
-                                                className="w-full p-4"
+                                                className="my-auto w-full p-4"
                                             />
                                         );
                                     }
                                     if (kind === 'document') {
+                                        const docSrc = activeChunk.media_url || src;
                                         return (
                                             <div className="bg-white">
-                                                <iframe title="Evidence document" src={src} className="h-[420px] w-full" />
-                                                <a href={src} download className="block px-4 py-2 text-center text-sm font-bold text-emerald-700">
-                                                    Download document
+                                                <iframe title="Evidence document" src={docSrc} className="h-[420px] w-full" />
+                                                <a href={docSrc} target="_blank" rel="noreferrer" className="block px-4 py-2 text-center text-sm font-bold text-emerald-700">
+                                                    📥 View Full Document
                                                 </a>
                                             </div>
                                         );
@@ -778,11 +848,11 @@ export default function EvidenceDashboard({ user }) {
                                         <>
                                             <video
                                                 key={activeChunk.sequence_number}
-                                                src={src}
+                                                src={activeChunk.media_url || src}
                                                 controls
-                                                autoPlay={continuousPlayback}
+                                                autoPlay
                                                 onEnded={playNextChunk}
-                                                className="aspect-video w-full bg-black"
+                                                className="h-full w-full object-contain"
                                             />
                                             {continuousPlayback && chunkPlaybackUrl(nextPlayable) ? (
                                                 <video src={chunkPlaybackUrl(nextPlayable)} preload="auto" className="hidden" />
@@ -824,28 +894,34 @@ export default function EvidenceDashboard({ user }) {
                                         <span className={`text-sm ${c.muted}`}>No automated assessment stored for this session.</span>
                                     </div>
                                 )}
-                                <div className="mt-4 flex flex-wrap items-center gap-2">
-                                    <label className="text-xs font-black uppercase tracking-wide" htmlFor="risk-override">
-                                        ⚠️ Override AI Assessment
-                                    </label>
-                                    <select
-                                        id="risk-override"
-                                        disabled={overriding}
-                                        defaultValue=""
-                                        onChange={(e) => {
-                                            const value = e.target.value;
-                                            e.target.value = '';
-                                            if (value === 'high' || value === 'medium' || value === 'low') {
-                                                handleOverrideRisk(value);
-                                            }
-                                        }}
-                                        className={`rounded-lg border px-3 py-2 text-sm font-bold ${c.input}`}
-                                    >
-                                        <option value="" disabled>Select tier…</option>
-                                        <option value="high">🔴 High</option>
-                                        <option value="medium">🟡 Medium</option>
-                                        <option value="low">🟢 Low</option>
-                                    </select>
+                                <div className="mt-4 space-y-2">
+                                    <p className="text-xs font-black uppercase tracking-wide">⚙️ Amend Risk Level</p>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            disabled={overriding}
+                                            onClick={() => handleOverrideRisk('high')}
+                                            className="rounded-lg bg-red-600 px-3 py-2 text-sm font-bold text-white shadow hover:bg-red-500 disabled:opacity-60"
+                                        >
+                                            🔴 High Risk
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={overriding}
+                                            onClick={() => handleOverrideRisk('medium')}
+                                            className="rounded-lg bg-amber-500 px-3 py-2 text-sm font-bold text-white shadow hover:bg-amber-400 disabled:opacity-60"
+                                        >
+                                            🟡 Medium Risk
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={overriding}
+                                            onClick={() => handleOverrideRisk('low')}
+                                            className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white shadow hover:bg-emerald-500 disabled:opacity-60"
+                                        >
+                                            🟢 Low Risk
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 

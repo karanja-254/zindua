@@ -181,6 +181,65 @@ class TelegramBroadcasterService
     }
 
     /**
+     * Reply to /test or /status with live vault operational counts.
+     */
+    public function replyOperationalStatus(string $chatId): bool
+    {
+        $token = $this->resolveBotToken();
+
+        if ($token === null) {
+            Log::info('Telegram /test skipped: TELEGRAM_BOT_TOKEN is empty or unset.');
+
+            return false;
+        }
+
+        $totalCount = EvidenceSession::query()->count();
+        $highCount = EvidenceSession::query()->where('risk_level', 'high')->count();
+        $medCount = EvidenceSession::query()->where('risk_level', 'medium')->count();
+        $lowCount = EvidenceSession::query()->where('risk_level', 'low')->count();
+
+        $text = implode("\n", [
+            '🛡️ ProofVault Operational Status',
+            '━━━━━━━━━━━━━━━━━━',
+            '🟢 Bot Status: ACTIVE & MONITORING',
+            '📊 Total Incidents: '.$totalCount,
+            '🔴 High Risk: '.$highCount,
+            '🟡 Medium Risk: '.$medCount,
+            '🟢 Low Risk: '.$lowCount,
+            '🔒 Storage Mode: Append-Only WORM Active',
+        ]);
+
+        try {
+            $response = Http::asJson()
+                ->timeout(15)
+                ->post(sprintf('%s/bot%s/sendMessage', self::API_BASE, $token), [
+                    'chat_id' => $chatId,
+                    'text' => $text,
+                    'disable_web_page_preview' => true,
+                ]);
+        } catch (\Throwable $exception) {
+            Log::error('Telegram /test status reply failed.', [
+                'chat_id' => $chatId,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        if ($response->failed()) {
+            Log::error('Telegram /test status reply failed.', [
+                'chat_id' => $chatId,
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * @return list<string>
      */
     private function resolveChannels(): array
@@ -189,10 +248,16 @@ class TelegramBroadcasterService
             ? $this->channels
             : (array) config('services.telegram.channels', []);
 
-        return array_values(array_filter(
+        $channelId = config('services.telegram.channel_id');
+
+        if (is_string($channelId) && trim($channelId) !== '') {
+            $configured = array_merge($configured, explode(',', $channelId));
+        }
+
+        return array_values(array_unique(array_filter(
             array_map(static fn (mixed $channel): string => trim((string) $channel), $configured),
             static fn (string $channel): bool => $channel !== '',
-        ));
+        )));
     }
 
     private function resolveBotToken(): ?string

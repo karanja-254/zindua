@@ -12,13 +12,14 @@ use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
 use App\Services\EvidenceMediaService;
 use App\Services\ForensicReportService;
+use DateTimeInterface;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class EvidenceSessionController extends Controller
 {
@@ -222,45 +223,11 @@ class EvidenceSessionController extends Controller
             'chunks' => fn ($query) => $query->orderBy('sequence_number'),
         ])->findOrFail($sessionId);
 
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 's3'));
+        $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
         $expiresAt = now()->addMinutes(5);
 
         $chunks = $session->chunks->map(function (EvidenceChunk $chunk) use ($disk, $expiresAt, $session): array {
-            $exists = false;
-
-            try {
-                $exists = $disk->exists($chunk->storage_path);
-            } catch (\Throwable) {
-                $exists = false;
-            }
-
-            $signedUrl = null;
-
-            if ($exists) {
-                try {
-                    $signedUrl = $disk->temporaryUrl($chunk->storage_path, $expiresAt);
-                } catch (\Throwable) {
-                    $signedUrl = null;
-                }
-            }
-
-            return [
-                'sequence_number' => $chunk->sequence_number,
-                'storage_path' => $chunk->storage_path,
-                'byte_size' => $chunk->byte_size,
-                'chunk_hash' => $chunk->chunk_hash,
-                'cumulative_hash' => $chunk->cumulative_hash,
-                'captured_at' => $chunk->captured_at,
-                'latitude' => $chunk->latitude,
-                'longitude' => $chunk->longitude,
-                'accuracy_meters' => $chunk->accuracy_meters,
-                'ai_threat_indicators' => $chunk->ai_threat_indicators,
-                'has_binary' => $exists,
-                'signed_url' => $signedUrl,
-                'media_url' => $exists
-                    ? url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media')
-                    : null,
-            ];
+            return $this->serializeChunkPayload($chunk, $session, $disk, $expiresAt);
         })->all();
 
         return response()->json([
@@ -335,63 +302,47 @@ class EvidenceSessionController extends Controller
     }
 
     /**
-     * Stream the forensic chain-of-custody PDF for the session with WORM-safe,
-     * non-cacheable read headers.
-     */
-    public function generateReport(Request $request, string $sessionId, ForensicReportService $reports): StreamedResponse
-    {
-        $session = EvidenceSession::findOrFail($sessionId);
-
-        $pdf = $reports->generateReport($session);
-
-        AuditLog::create([
-            'session_id' => $session->id,
-            'actor_ip' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-            'action' => 'report.generated',
-        ]);
-
-        $filename = sprintf('proofvault-forensic-%s.pdf', $session->evidenceId());
-
-        return response()->streamDownload(
-            static function () use ($pdf): void {
-                echo $pdf;
-            },
-            $filename,
-            [
-                'Content-Type' => 'application/pdf',
-                'Content-Length' => (string) strlen($pdf),
-                'Cache-Control' => 'no-store, no-cache, must-revalidate, private',
-                'Pragma' => 'no-cache',
-                'X-Content-Type-Options' => 'nosniff',
-                'X-WORM-Policy' => 'read-only; evidence records are immutable',
-            ],
-        );
-    }
-
-    /**
      * Investigator override of the session risk tier (does not rewrite chunk hashes).
      */
-    public function overrideRiskLevel(Request $request, string $sessionId): JsonResponse
+    public function overrideRisk(Request $request, string $sessionId): JsonResponse
     {
         $data = $request->validate([
             'risk_level' => ['required', 'in:high,medium,low'],
+            'override_reason' => ['nullable', 'string', 'max:2000'],
             'reason' => ['nullable', 'string', 'max:2000'],
         ]);
 
+        $reason = (string) ($data['override_reason'] ?? $data['reason'] ?? 'Investigator manually overrode AI assessment.');
+
+        return $this->applyRiskOverride($request, $sessionId, $data['risk_level'], $reason);
+    }
+
+    /**
+     * Alias retained for existing clients.
+     */
+    public function overrideRiskLevel(Request $request, string $sessionId): JsonResponse
+    {
+        return $this->overrideRisk($request, $sessionId);
+    }
+
+    /**
+     * @param  'high'|'medium'|'low'  $riskLevel
+     */
+    private function applyRiskOverride(Request $request, string $sessionId, string $riskLevel, string $reason): JsonResponse
+    {
         $session = EvidenceSession::with(['chunks' => fn ($query) => $query->orderByDesc('sequence_number')])
             ->findOrFail($sessionId);
 
-        $session->forceFill(['risk_level' => $data['risk_level']])->save();
+        $session->forceFill(['risk_level' => $riskLevel])->save();
 
         AuditLog::create([
             'session_id' => $session->id,
             'actor_ip' => $request->ip(),
             'user_agent' => $request->userAgent(),
-            'action' => 'risk.manually_overridden',
+            'action' => 'risk.manually_overridden:'.$riskLevel,
         ]);
 
-        if ($data['risk_level'] === 'high') {
+        if ($riskLevel === 'high') {
             $chunk = $session->chunks->first();
 
             if ($chunk !== null) {
@@ -404,18 +355,22 @@ class EvidenceSessionController extends Controller
                 $payload = [
                     ...$indicators,
                     'risk_level' => 'high',
-                    'reason' => (string) ($data['reason'] ?? 'Investigator manually overrode AI assessment to high.'),
+                    'reason' => $reason !== '' ? $reason : 'Investigator manually overrode AI assessment to high.',
                     'confidence' => 1.0,
                     'source' => 'manual_override',
                 ];
 
-                Bus::chain([
-                    new BroadcastTelegramAlertJob($session, $chunk, $payload),
-                    new DispatchVoiceBriefingJob($session, $chunk, $indicators),
-                ])
-                    ->onConnection('redis')
-                    ->onQueue('threat-analysis')
-                    ->dispatch();
+                try {
+                    BroadcastTelegramAlertJob::dispatch($session, $chunk, $payload);
+                    Bus::chain([
+                        new DispatchVoiceBriefingJob($session, $chunk, $indicators),
+                    ])
+                        ->onConnection('redis')
+                        ->onQueue('threat-analysis')
+                        ->dispatch();
+                } catch (\Throwable) {
+                    // Telegram/voice dispatch must never block the override response.
+                }
             }
         }
 
@@ -440,7 +395,7 @@ class EvidenceSessionController extends Controller
             ->where('sequence_number', $sequence)
             ->firstOrFail();
 
-        $disk = Storage::disk((string) config('filesystems.evidence_disk', 's3'));
+        $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
 
         try {
             if (! $disk->exists($chunk->storage_path)) {
@@ -450,27 +405,57 @@ class EvidenceSessionController extends Controller
             abort(Response::HTTP_NOT_FOUND, 'No binary stream stored for this chunk.');
         }
 
-        $extension = strtolower(pathinfo((string) $chunk->storage_path, PATHINFO_EXTENSION));
-        $mime = match ($extension) {
-            'jpg', 'jpeg' => 'image/jpeg',
-            'png' => 'image/png',
-            'webp' => 'image/webp',
-            'gif' => 'image/gif',
-            'mp4' => 'video/mp4',
-            'webm' => 'video/webm',
-            'mov' => 'video/quicktime',
-            'mp3' => 'audio/mpeg',
-            'wav' => 'audio/wav',
-            'ogg' => 'audio/ogg',
-            'm4a', 'aac' => 'audio/mp4',
-            'pdf' => 'application/pdf',
-            default => 'application/octet-stream',
-        };
+        $mime = $chunk->mimeType();
 
         return $disk->response($chunk->storage_path, basename((string) $chunk->storage_path), [
             'Content-Type' => $mime,
             'Cache-Control' => 'no-store, no-cache, must-revalidate, private',
             'X-WORM-Policy' => 'read-only; evidence records are immutable',
         ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeChunkPayload(EvidenceChunk $chunk, EvidenceSession $session, Filesystem $disk, DateTimeInterface $expiresAt): array
+    {
+        $exists = false;
+
+        try {
+            $exists = $disk->exists($chunk->storage_path);
+        } catch (\Throwable) {
+            $exists = false;
+        }
+
+        $signedUrl = null;
+
+        if ($exists) {
+            try {
+                $signedUrl = $disk->temporaryUrl($chunk->storage_path, $expiresAt);
+            } catch (\Throwable) {
+                $signedUrl = null;
+            }
+        }
+
+        $proxyUrl = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
+        $mediaUrl = $signedUrl ?? ($exists ? $proxyUrl : null);
+
+        return [
+            'sequence_number' => $chunk->sequence_number,
+            'storage_path' => $chunk->storage_path,
+            'byte_size' => $chunk->byte_size,
+            'chunk_hash' => $chunk->chunk_hash,
+            'cumulative_hash' => $chunk->cumulative_hash,
+            'captured_at' => $chunk->captured_at,
+            'latitude' => $chunk->latitude,
+            'longitude' => $chunk->longitude,
+            'accuracy_meters' => $chunk->accuracy_meters,
+            'ai_threat_indicators' => $chunk->ai_threat_indicators,
+            'has_binary' => $exists,
+            'signed_url' => $signedUrl,
+            'media_url' => $mediaUrl,
+            'mime_type' => $chunk->mimeType(),
+            'file_type' => $chunk->fileType(),
+        ];
     }
 }

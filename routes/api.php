@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\EvidenceChunkController;
+use App\Http\Controllers\Api\V1\EvidenceReportController;
 use App\Http\Controllers\Api\V1\EvidenceSessionController;
 use App\Http\Controllers\Api\V1\MasterKeyAuthController;
+use App\Http\Controllers\Api\V1\TelegramWebhookController;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Response;
@@ -13,6 +15,7 @@ use Symfony\Component\HttpFoundation\Response;
 Route::post('/v1/auth/login', [AuthController::class, 'login']);
 Route::post('/v1/auth/unlock', [MasterKeyAuthController::class, 'authenticate']);
 Route::post('/v1/auth/register', [MasterKeyAuthController::class, 'register']);
+Route::post('/v1/telegram/webhook', [TelegramWebhookController::class, 'handleWebhook']);
 
 Route::prefix('v1/evidence')->group(function (): void {
     // Public ingestion endpoints — live evidence stream capture.
@@ -33,7 +36,7 @@ Route::prefix('v1/evidence')->group(function (): void {
 
         Route::post('/{sessionId}/upload-file', [EvidenceChunkController::class, 'uploadDirectFile']);
 
-        Route::post('/{sessionId}/override-risk', [EvidenceSessionController::class, 'overrideRiskLevel']);
+        Route::post('/{sessionId}/override-risk', [EvidenceSessionController::class, 'overrideRisk']);
 
         Route::get('/{sessionId}/chunks/{sequence}/media', [EvidenceSessionController::class, 'streamChunk'])
             ->whereNumber('sequence');
@@ -44,7 +47,7 @@ Route::prefix('v1/evidence')->group(function (): void {
 
         Route::get('/{sessionId}/export-package', [EvidenceSessionController::class, 'exportPackage']);
 
-        Route::get('/{sessionId}/report', [EvidenceSessionController::class, 'generateReport']);
+        Route::get('/{sessionId}/report', [EvidenceReportController::class, 'downloadPdf']);
 
         Route::get('/{sessionId}', [EvidenceSessionController::class, 'show']);
     });
