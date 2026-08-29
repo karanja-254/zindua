@@ -1,0 +1,151 @@
+# Render deployment blueprint for WitnessVault (Laravel 12 backend).
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  # ---------------------------------------------------------------------------
+  # Web service: Laravel 12 (PHP 8.3) served via Nginx + PHP-FPM (see Dockerfile)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: witnessvault-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard
+    healthCheckPath: /up
+    autoDeploy: true
+    envVars:
+      - key: APP_NAME
+        value: WitnessVault
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_KEY
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: LOG_CHANNEL
+        value: stderr
+      - key: QUEUE_CONNECTION
+        value: redis
+      - key: CACHE_STORE
+        value: redis
+      - key: SESSION_DRIVER
+        value: redis
+      - key: FILESYSTEM_DISK
+        value: s3
+      - key: EVIDENCE_DISK
+        value: s3
+      # Managed Redis connection string injected from the Redis instance below.
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: witnessvault-redis
+          property: connectionString
+      # Database + object storage + third-party secrets are set in the dashboard.
+      - key: DB_CONNECTION
+        value: mysql
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_DATABASE
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_DEFAULT_REGION
+        sync: false
+      - key: AWS_BUCKET
+        sync: false
+      - key: AWS_ENDPOINT
+        sync: false
+      - key: AWS_USE_PATH_STYLE_ENDPOINT
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ALERT_CHANNELS
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # Background worker: consumes the threat-analysis + default queues on Redis.
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: witnessvault-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard
+    autoDeploy: true
+    dockerCommand: php artisan queue:work redis --queue=threat-analysis,default --tries=3 --timeout=120
+    envVars:
+      - key: APP_NAME
+        value: WitnessVault
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_KEY
+        sync: false
+      - key: LOG_CHANNEL
+        value: stderr
+      - key: QUEUE_CONNECTION
+        value: redis
+      - key: CACHE_STORE
+        value: redis
+      - key: FILESYSTEM_DISK
+        value: s3
+      - key: EVIDENCE_DISK
+        value: s3
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: witnessvault-redis
+          property: connectionString
+      - key: DB_CONNECTION
+        value: mysql
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_DATABASE
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_DEFAULT_REGION
+        sync: false
+      - key: AWS_BUCKET
+        sync: false
+      - key: AWS_ENDPOINT
+        sync: false
+      - key: AWS_USE_PATH_STYLE_ENDPOINT
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ALERT_CHANNELS
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # Managed Redis: queue backend + cache/session store.
+  # ---------------------------------------------------------------------------
+  - type: redis
+    name: witnessvault-redis
+    plan: standard
+    maxmemoryPolicy: noeviction
+    ipAllowList: []

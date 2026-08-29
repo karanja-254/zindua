@@ -1,0 +1,282 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services;
+
+use App\Models\EvidenceChunk;
+use App\Models\EvidenceSession;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+
+class TelegramBroadcasterService
+{
+    private const API_BASE = 'https://api.telegram.org';
+
+    public function __construct(
+        private readonly ?string $botToken = null,
+        /** @var list<string> */
+        private readonly array $channels = [],
+    ) {
+    }
+
+    /**
+     * Post a MarkdownV2 incident alert with a GPS pin and hash verification card
+     * to every configured monitoring/community channel.
+     *
+     * @param  array{weapon: float, violence: float, acoustic_distress: float}  $aiIndicators
+     * @return array<string, bool>  Map of channel id => delivery success.
+     */
+    public function broadcastThreatAlert(EvidenceSession $session, EvidenceChunk $chunk, array $aiIndicators): array
+    {
+        $channels = $this->resolveChannels();
+
+        if ($channels === []) {
+            Log::info('Telegram broadcast skipped: TELEGRAM_ALERT_CHANNELS is empty or unset.', [
+                'session_id' => $session->id,
+            ]);
+
+            return [];
+        }
+
+        $token = $this->resolveBotToken();
+
+        if ($token === null) {
+            Log::info('Telegram broadcast skipped: TELEGRAM_BOT_TOKEN is empty or unset.', [
+                'session_id' => $session->id,
+            ]);
+
+            return [];
+        }
+
+        $message = $this->buildMessage($session, $chunk, $aiIndicators);
+        $results = [];
+
+        foreach ($channels as $channel) {
+            try {
+                $response = Http::asJson()
+                    ->timeout(15)
+                    ->post(sprintf('%s/bot%s/sendMessage', self::API_BASE, $token), [
+                        'chat_id' => $channel,
+                        'text' => $message,
+                        'parse_mode' => 'MarkdownV2',
+                        'disable_web_page_preview' => false,
+                    ]);
+            } catch (\Throwable $exception) {
+                Log::error('Telegram threat alert delivery failed.', [
+                    'session_id' => $session->id,
+                    'channel' => $channel,
+                    'error' => $exception->getMessage(),
+                ]);
+                $results[$channel] = false;
+
+                continue;
+            }
+
+            $results[$channel] = $response->successful();
+
+            if ($response->failed()) {
+                Log::error('Telegram threat alert delivery failed.', [
+                    'session_id' => $session->id,
+                    'channel' => $channel,
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * Send a synthesized emergency voice briefing (MP3) to all configured channels
+     * as a Telegram voice note.
+     *
+     * @param  string  $audioStoragePath  Path on the S3 disk to the MP3 briefing.
+     * @return array<string, bool>  Map of channel id => delivery success.
+     */
+    public function sendVoice(EvidenceSession $session, string $audioStoragePath, ?string $caption = null): array
+    {
+        $channels = $this->resolveChannels();
+
+        if ($channels === []) {
+            Log::info('Telegram voice note skipped: TELEGRAM_ALERT_CHANNELS is empty or unset.', [
+                'session_id' => $session->id,
+            ]);
+
+            return [];
+        }
+
+        $token = $this->resolveBotToken();
+
+        if ($token === null) {
+            Log::info('Telegram voice note skipped: TELEGRAM_BOT_TOKEN is empty or unset.', [
+                'session_id' => $session->id,
+            ]);
+
+            return [];
+        }
+
+        try {
+            if (! Storage::disk('s3')->exists($audioStoragePath)) {
+                Log::error('Telegram voice note skipped: briefing audio not found.', [
+                    'session_id' => $session->id,
+                    'path' => $audioStoragePath,
+                ]);
+
+                return [];
+            }
+
+            $audio = Storage::disk('s3')->get($audioStoragePath);
+        } catch (\Throwable $exception) {
+            Log::error('Telegram voice note skipped: briefing audio could not be read.', [
+                'session_id' => $session->id,
+                'path' => $audioStoragePath,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return [];
+        }
+
+        $filename = basename($audioStoragePath);
+        $results = [];
+
+        foreach ($channels as $channel) {
+            try {
+                $request = Http::timeout(45)
+                    ->attach('voice', $audio, $filename);
+
+                $payload = ['chat_id' => $channel];
+
+                if ($caption !== null) {
+                    $payload['caption'] = $this->escape($caption);
+                    $payload['parse_mode'] = 'MarkdownV2';
+                }
+
+                $response = $request->post(sprintf('%s/bot%s/sendVoice', self::API_BASE, $token), $payload);
+            } catch (\Throwable $exception) {
+                Log::error('Telegram voice note delivery failed.', [
+                    'session_id' => $session->id,
+                    'channel' => $channel,
+                    'error' => $exception->getMessage(),
+                ]);
+                $results[$channel] = false;
+
+                continue;
+            }
+
+            $results[$channel] = $response->successful();
+
+            if ($response->failed()) {
+                Log::error('Telegram voice note delivery failed.', [
+                    'session_id' => $session->id,
+                    'channel' => $channel,
+                    'status' => $response->status(),
+                ]);
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function resolveChannels(): array
+    {
+        $configured = $this->channels !== []
+            ? $this->channels
+            : (array) config('services.telegram.channels', []);
+
+        return array_values(array_filter(
+            array_map(static fn (mixed $channel): string => trim((string) $channel), $configured),
+            static fn (string $channel): bool => $channel !== '',
+        ));
+    }
+
+    private function resolveBotToken(): ?string
+    {
+        $token = $this->botToken ?? config('services.telegram.bot_token');
+
+        if (! is_string($token) || trim($token) === '') {
+            return null;
+        }
+
+        return $token;
+    }
+
+    /**
+     * Compose the MarkdownV2 high-priority incident card.
+     *
+     * @param  array{weapon?: float, violence?: float, acoustic_distress?: float, reason?: string, risk_level?: string}  $aiIndicators
+     */
+    private function buildMessage(EvidenceSession $session, EvidenceChunk $chunk, array $aiIndicators): string
+    {
+        $evidenceId = $session->evidenceId();
+        $pin = $this->buildGpsPin($chunk);
+        $lat = $chunk->latitude;
+        $lng = $chunk->longitude;
+        $locationLabel = ($lat !== null && $lng !== null)
+            ? sprintf('Nairobi (%s, %s)', $lat, $lng)
+            : 'Location unavailable';
+
+        $weapon = $this->asPercent((float) ($aiIndicators['weapon'] ?? 0));
+        $distress = $this->asPercent((float) ($aiIndicators['acoustic_distress'] ?? 0));
+        $reason = (string) ($aiIndicators['reason'] ?? 'High-risk multi-modal indicators detected.');
+
+        $reviewUrl = rtrim((string) config('app.url'), '/').'/vault';
+        $reportUrl = rtrim((string) config('app.url'), '/').'/api/v1/evidence/'.$session->id.'/report';
+
+        $locationLine = $pin !== null
+            ? '📍 *Location:* ['.$this->escape($locationLabel).']('.$pin.')'
+            : '📍 *Location:* '.$this->escape($locationLabel);
+
+        $session->loadMissing('user');
+        $userName = $session->user?->name ?: 'Unknown investigator';
+
+        $lines = [
+            '🔴 *HIGH\\-RISK INCIDENT DETECTED*',
+            '',
+            '*Evidence ID:* `'.$this->escape($evidenceId).'`',
+            '*Session:* `'.$this->escape((string) $session->id).'`',
+            '👤 *Preserved by:* '.$this->escape($userName),
+            $locationLine,
+            '',
+            '*AI Indicators & Confidence:*',
+            $this->escape(sprintf('Apparent weapon (%s), acoustic distress (%s)', $weapon, $distress)),
+            $this->escape($reason),
+            '',
+            '🔐 *Chain Hash:* `'.$this->escape((string) $chunk->cumulative_hash).'`',
+            '',
+            '['.$this->escape('Open review console').']('.$reviewUrl.')',
+            '['.$this->escape('Download Chain-of-Custody PDF').']('.$reportUrl.')',
+        ];
+
+        return implode("\n", $lines);
+    }
+
+    private function buildGpsPin(EvidenceChunk $chunk): ?string
+    {
+        if ($chunk->latitude === null || $chunk->longitude === null) {
+            return null;
+        }
+
+        return sprintf('https://www.google.com/maps?q=%s,%s', $chunk->latitude, $chunk->longitude);
+    }
+
+    private function asPercent(float $score): string
+    {
+        return number_format($score * 100, 1).'%';
+    }
+
+    /**
+     * Escape reserved MarkdownV2 characters per the Telegram Bot API spec.
+     */
+    private function escape(string $value): string
+    {
+        $reserved = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+
+        return str_replace($reserved, array_map(static fn (string $c): string => '\\'.$c, $reserved), $value);
+    }
+}
