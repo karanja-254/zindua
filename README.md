@@ -288,51 +288,7 @@ All threat jobs use Redis queue `threat-analysis`.
 
 ## Environment variables
 
-Copy from `.env.example`. Important keys:
-
-```env
-APP_KEY=
-APP_URL=http://localhost:8000
-
-DB_CONNECTION=sqlite
-# or mysql + DB_HOST / DB_DATABASE / DB_USERNAME / DB_PASSWORD
-
-EVIDENCE_DISK=local          # local | r2 | s3
-QUEUE_CONNECTION=database    # prod often redis
-CACHE_STORE=database
-SESSION_DRIVER=database
-
-# R2
-CLOUDFLARE_R2_ACCESS_KEY_ID=
-CLOUDFLARE_R2_SECRET_ACCESS_KEY=
-CLOUDFLARE_R2_BUCKET=
-CLOUDFLARE_R2_ENDPOINT=
-
-# S3
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-AWS_DEFAULT_REGION=
-AWS_BUCKET=
-
-# Alerts / AI
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_ALERT_CHANNELS=
-ELEVENLABS_API_KEY=
-ELEVENLABS_VOICE_ID=
-GEMINI_API_KEY=
-FFMPEG_PATH=
-SMS_DRIVER=africastalking
-SMS_EMERGENCY_RECIPIENTS=
-AFRICASTALKING_USERNAME=
-AFRICASTALKING_API_KEY=
-TWILIO_ACCOUNT_SID=
-TWILIO_AUTH_TOKEN=
-TWILIO_FROM=
-
-REDIS_CLIENT=predis
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-```
+Copy `.env.example` to `.env` and fill in values there. Do not commit secrets. For local development, set `DB_CONNECTION=sqlite` and `EVIDENCE_DISK=local`.
 
 ---
 
