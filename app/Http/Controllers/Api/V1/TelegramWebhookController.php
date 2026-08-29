@@ -22,6 +22,10 @@ class TelegramWebhookController extends Controller
      */
     public function handleWebhook(Request $request, TelegramBroadcasterService $telegram): JsonResponse
     {
+        if (! $this->webhookSecretIsValid($request)) {
+            return response()->json(['ok' => false], Response::HTTP_FORBIDDEN);
+        }
+
         $payload = $this->extractTelegramMessage($request);
 
         $text = trim((string) ($payload['text'] ?? $payload['caption'] ?? ''));
@@ -36,10 +40,15 @@ class TelegramWebhookController extends Controller
             return response()->json(['ok' => true], Response::HTTP_OK);
         }
 
+        if (! $telegram->isAllowedChat($chatId)) {
+            return response()->json(['ok' => true], Response::HTTP_OK);
+        }
+
         $total = EvidenceSession::query()->count();
         $high = EvidenceSession::query()->where('risk_level', 'high')->count();
         $medium = EvidenceSession::query()->where('risk_level', 'medium')->count();
         $low = EvidenceSession::query()->where('risk_level', 'low')->count();
+        $portal = rtrim((string) config('app.url'), '/').'/vault';
 
         $reply = "🛡️ WitnessVault Sentinel Status\n"
             ."━━━━━━━━━━━━━━━━━━━━\n"
@@ -49,7 +58,7 @@ class TelegramWebhookController extends Controller
             ."🟡 Medium Risk: {$medium}\n"
             ."🟢 Low Risk: {$low}\n"
             ."🔒 Storage: Immutable WORM Active\n"
-            .'🌐 Portal: https://vault.karanja.online';
+            .'🌐 Portal: '.$portal;
 
         $threadId = isset($payload['message_thread_id']) ? (int) $payload['message_thread_id'] : null;
 
@@ -69,6 +78,19 @@ class TelegramWebhookController extends Controller
         }
 
         return response()->json(['ok' => true], Response::HTTP_OK);
+    }
+
+    private function webhookSecretIsValid(Request $request): bool
+    {
+        $expected = trim((string) config('services.telegram.webhook_secret', ''));
+
+        if ($expected === '') {
+            return ! app()->environment('production');
+        }
+
+        $provided = (string) $request->header('X-Telegram-Bot-Api-Secret-Token', '');
+
+        return $provided !== '' && hash_equals($expected, $provided);
     }
 
     /**

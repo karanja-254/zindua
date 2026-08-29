@@ -65,7 +65,15 @@ services:
         sync: false
       - key: AWS_BUCKET
         sync: false
+      - key: AWS_URL
+        sync: false
       - key: AWS_ENDPOINT
+        sync: false
+      - key: AWS_BUCKET_ENDPOINT
+        sync: false
+      - key: AWS_OBJECT_LOCK_MODE
+        sync: false
+      - key: AWS_OBJECT_LOCK_RETAIN_UNTIL
         sync: false
       - key: AWS_USE_PATH_STYLE_ENDPOINT
         value: "true"
@@ -73,10 +81,38 @@ services:
         sync: false
       - key: TELEGRAM_ALERT_CHANNELS
         sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: ELEVENLABS_VOICE_ID
         sync: false
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_multilingual_v2
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: FFMPEG_PATH
+        value: /usr/bin/ffmpeg
+      - key: SMS_DRIVER
+        value: africastalking
+      - key: SMS_EMERGENCY_RECIPIENTS
+        sync: false
+      - key: AFRICASTALKING_USERNAME
+        sync: false
+      - key: AFRICASTALKING_API_KEY
+        sync: false
+      - key: AFRICASTALKING_SENDER_ID
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      - key: SANCTUM_EXPIRATION
+        value: "720"
 
   # ---------------------------------------------------------------------------
   # Background worker: consumes the threat-analysis + default queues on Redis.
@@ -136,7 +172,15 @@ services:
         sync: false
       - key: AWS_BUCKET
         sync: false
+      - key: AWS_URL
+        sync: false
       - key: AWS_ENDPOINT
+        sync: false
+      - key: AWS_BUCKET_ENDPOINT
+        sync: false
+      - key: AWS_OBJECT_LOCK_MODE
+        sync: false
+      - key: AWS_OBJECT_LOCK_RETAIN_UNTIL
         sync: false
       - key: AWS_USE_PATH_STYLE_ENDPOINT
         value: "true"
@@ -144,10 +188,38 @@ services:
         sync: false
       - key: TELEGRAM_ALERT_CHANNELS
         sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: ELEVENLABS_VOICE_ID
         sync: false
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_multilingual_v2
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: FFMPEG_PATH
+        value: /usr/bin/ffmpeg
+      - key: SMS_DRIVER
+        value: africastalking
+      - key: SMS_EMERGENCY_RECIPIENTS
+        sync: false
+      - key: AFRICASTALKING_USERNAME
+        sync: false
+      - key: AFRICASTALKING_API_KEY
+        sync: false
+      - key: AFRICASTALKING_SENDER_ID
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      - key: SANCTUM_EXPIRATION
+        value: "720"
 
   # ---------------------------------------------------------------------------
   # Managed Redis: queue backend + cache/session store.

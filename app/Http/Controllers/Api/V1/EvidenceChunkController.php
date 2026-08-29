@@ -38,7 +38,7 @@ class EvidenceChunkController extends Controller
      */
     public function uploadChunk(Request $request, string $sessionId): JsonResponse
     {
-        $session = EvidenceSession::findOrFail($sessionId);
+        $session = EvidenceSession::findOwnedOrFail($sessionId, $request->user());
 
         if ($session->status !== 'active') {
             return response()->json([
@@ -257,7 +257,7 @@ class EvidenceChunkController extends Controller
             ]);
         }
 
-        return EvidenceSession::findOrFail($sessionId);
+        return EvidenceSession::findOwnedOrFail($sessionId, $request->user());
     }
 
     private function discardEmptyUploadSession(EvidenceSession $session, string $requestedId): void

@@ -10,6 +10,7 @@ use App\Services\TelegramBroadcasterService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use App\Jobs\Concerns\UsesThreatAnalysisQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
@@ -20,6 +21,7 @@ class BroadcastTelegramAlertJob implements ShouldQueue
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
+    use UsesThreatAnalysisQueue;
 
     public int $tries = 3;
 
@@ -35,8 +37,7 @@ class BroadcastTelegramAlertJob implements ShouldQueue
     ) {
         // Use the environment-configured queue connection so this job dispatches
         // correctly on both database (local) and redis (production) drivers.
-        $connection = config('queue.default', 'sync');
-        $this->onConnection((string) $connection)->onQueue('threat-analysis');
+        $this->onThreatQueue();
     }
 
     /**

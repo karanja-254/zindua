@@ -19,6 +19,9 @@ class TelegramWebhookTest extends TestCase
         parent::setUp();
 
         Config::set('services.telegram.bot_token', 'test-bot-token');
+        Config::set('services.telegram.webhook_secret', 'test-webhook-secret');
+        Config::set('services.telegram.channels', []);
+        Config::set('services.telegram.channel_id', null);
         Http::fake([
             'api.telegram.org/*' => Http::response(['ok' => true, 'result' => ['message_id' => 1]], 200),
         ]);
@@ -33,7 +36,7 @@ class TelegramWebhookTest extends TestCase
             'finalized_at' => now(),
         ]);
 
-        $response = $this->postJson('/api/v1/telegram/webhook', [
+        $response = $this->webhook([
             'update_id' => 42,
             'channel_post' => [
                 'message_id' => 10,
@@ -67,7 +70,7 @@ class TelegramWebhookTest extends TestCase
 
     public function test_direct_message_status_command_sends_status_reply(): void
     {
-        $response = $this->postJson('/api/v1/telegram/webhook', [
+        $response = $this->webhook([
             'update_id' => 43,
             'message' => [
                 'message_id' => 11,
@@ -92,7 +95,7 @@ class TelegramWebhookTest extends TestCase
 
     public function test_unrelated_channel_post_does_not_call_telegram(): void
     {
-        $response = $this->postJson('/api/v1/telegram/webhook', [
+        $response = $this->webhook([
             'update_id' => 44,
             'channel_post' => [
                 'message_id' => 12,
@@ -107,5 +110,31 @@ class TelegramWebhookTest extends TestCase
 
         $response->assertOk()->assertJson(['ok' => true]);
         Http::assertNothingSent();
+    }
+
+    public function test_webhook_without_secret_is_forbidden(): void
+    {
+        $response = $this->postJson('/api/v1/telegram/webhook', [
+            'update_id' => 45,
+            'message' => [
+                'message_id' => 13,
+                'date' => time(),
+                'chat' => ['id' => 555001, 'type' => 'private'],
+                'text' => '/status',
+            ],
+        ]);
+
+        $response->assertForbidden();
+        Http::assertNothingSent();
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function webhook(array $payload)
+    {
+        return $this->postJson('/api/v1/telegram/webhook', $payload, [
+            'X-Telegram-Bot-Api-Secret-Token' => 'test-webhook-secret',
+        ]);
     }
 }

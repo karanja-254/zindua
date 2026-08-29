@@ -8,13 +8,13 @@ use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 class TelegramBroadcasterService
 {
     private const API_BASE = 'https://api.telegram.org';
 
     public function __construct(
+        private readonly EvidenceStorageService $storage,
         private readonly ?string $botToken = null,
         /** @var list<string> */
         private readonly array $channels = [],
@@ -93,7 +93,7 @@ class TelegramBroadcasterService
      * Send a synthesized emergency voice briefing (MP3) to all configured channels
      * as a Telegram voice note.
      *
-     * @param  string  $audioStoragePath  Path on the S3 disk to the MP3 briefing.
+     * @param  string  $audioStoragePath  Path on the evidence disk to the MP3 briefing.
      * @return array<string, bool>  Map of channel id => delivery success.
      */
     public function sendVoice(EvidenceSession $session, string $audioStoragePath, ?string $caption = null): array
@@ -119,7 +119,7 @@ class TelegramBroadcasterService
         }
 
         try {
-            if (! Storage::disk('s3')->exists($audioStoragePath)) {
+            if (! $this->storage->exists($audioStoragePath)) {
                 Log::error('Telegram voice note skipped: briefing audio not found.', [
                     'session_id' => $session->id,
                     'path' => $audioStoragePath,
@@ -128,7 +128,16 @@ class TelegramBroadcasterService
                 return [];
             }
 
-            $audio = Storage::disk('s3')->get($audioStoragePath);
+            $audio = $this->storage->get($audioStoragePath);
+
+            if (! is_string($audio) || $audio === '') {
+                Log::error('Telegram voice note skipped: briefing audio not found.', [
+                    'session_id' => $session->id,
+                    'path' => $audioStoragePath,
+                ]);
+
+                return [];
+            }
         } catch (\Throwable $exception) {
             Log::error('Telegram voice note skipped: briefing audio could not be read.', [
                 'session_id' => $session->id,
@@ -306,6 +315,25 @@ class TelegramBroadcasterService
     /**
      * @return list<string>
      */
+    public function allowedChatIds(): array
+    {
+        return $this->resolveChannels();
+    }
+
+    public function isAllowedChat(int|string $chatId): bool
+    {
+        $allowed = $this->resolveChannels();
+
+        if ($allowed === []) {
+            return true;
+        }
+
+        return in_array((string) $chatId, $allowed, true);
+    }
+
+    /**
+     * @return list<string>
+     */
     private function resolveChannels(): array
     {
         $configured = $this->channels !== []
@@ -343,7 +371,7 @@ class TelegramBroadcasterService
     private function buildMessage(EvidenceSession $session, ?EvidenceChunk $chunk, array $aiIndicators): string
     {
         $evidenceId = $session->evidenceId();
-        $portal = 'https://vault.karanja.online';
+        $portal = rtrim((string) config('app.url', 'http://localhost'), '/').'/vault';
         $weapon = $this->asPercent((float) ($aiIndicators['weapon'] ?? 0));
         $violence = $this->asPercent((float) ($aiIndicators['violence'] ?? 0));
         $distress = $this->asPercent((float) ($aiIndicators['acoustic_distress'] ?? 0));
@@ -361,10 +389,10 @@ class TelegramBroadcasterService
             $lat = $chunk->latitude;
             $lng = $chunk->longitude;
             $locationLabel = ($lat !== null && $lng !== null)
-                ? sprintf('Nairobi (%s, %s)', $lat, $lng)
+                ? sprintf('%s, %s', $lat, $lng)
                 : 'Location unavailable';
             $locationLine = $pin !== null
-                ? '📍 *Location:* ['.$this->escape($locationLabel).']('.$pin.')'
+                ? '📍 *Location:* '.$this->markdownLink($locationLabel, $pin)
                 : '📍 *Location:* '.$this->escape($locationLabel);
         }
 
@@ -383,7 +411,7 @@ class TelegramBroadcasterService
             '',
             '🔐 *Chain Hash:* `'.$this->escape((string) ($chunk?->cumulative_hash ?? $session->chain_hash ?? '')).'`',
             '',
-            '['.$this->escape('Open secure portal').']('.$portal.')',
+            $this->markdownLink('Open secure portal', $portal),
         ];
 
         return implode("\n", $lines);
@@ -401,6 +429,13 @@ class TelegramBroadcasterService
     private function asPercent(float $score): string
     {
         return number_format($score * 100, 1).'%';
+    }
+
+    private function markdownLink(string $label, string $url): string
+    {
+        $escapedUrl = str_replace(['\\', ')'], ['\\\\', '\\)'], $url);
+
+        return '['.$this->escape($label).']('.$escapedUrl.')';
     }
 
     /**

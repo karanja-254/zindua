@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
 use App\Models\User;
+use App\Services\EvidenceStorageService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -22,7 +23,7 @@ class ProofVaultSecurityTest extends TestCase
         $user = User::factory()->create();
         Sanctum::actingAs($user);
 
-        $session = $this->seedChainedSession(5);
+        $session = $this->seedChainedSession(5, $user);
 
         $response = $this->getJson('/api/v1/evidence/'.$session->id.'/verify');
 
@@ -37,7 +38,7 @@ class ProofVaultSecurityTest extends TestCase
         $user = User::factory()->create();
         Sanctum::actingAs($user);
 
-        $session = $this->seedChainedSession(5);
+        $session = $this->seedChainedSession(5, $user);
 
         EvidenceChunk::query()
             ->where('session_id', $session->id)
@@ -52,9 +53,21 @@ class ProofVaultSecurityTest extends TestCase
             ->assertJsonPath('tampered_at', 3);
     }
 
+    public function test_missing_stored_object_is_reported_as_tamper(): void
+    {
+        $user = User::factory()->create();
+        Sanctum::actingAs($user);
+
+        $session = $this->seedChainedSession(1, $user, writeFiles: false);
+
+        $this->getJson('/api/v1/evidence/'.$session->id.'/verify')
+            ->assertStatus(422)
+            ->assertJsonPath('status', 'TAMPER_DETECTED');
+    }
+
     public function test_worm_policy_rejects_put_patch_delete_requests(): void
     {
-        $session = $this->seedChainedSession(1);
+        $session = $this->seedChainedSession(1, User::factory()->create());
         $url = '/api/v1/evidence/'.$session->id;
         $message = 'WORM Policy: Evidence records cannot be modified or destroyed.';
 
@@ -71,26 +84,56 @@ class ProofVaultSecurityTest extends TestCase
             ->assertJsonPath('error', $message);
     }
 
-    private function seedChainedSession(int $count): EvidenceSession
+    public function test_unauthenticated_chunk_upload_is_rejected(): void
+    {
+        $session = $this->seedChainedSession(1, User::factory()->create(), status: 'active');
+
+        $this->call('POST', '/api/v1/evidence/'.$session->id.'/chunk', [], [], [], [
+            'CONTENT_TYPE' => 'video/webm',
+            'HTTP_ACCEPT' => 'application/json',
+        ], 'bytes')
+            ->assertUnauthorized();
+    }
+
+    public function test_investigator_cannot_read_another_users_session(): void
+    {
+        $owner = User::factory()->create();
+        $intruder = User::factory()->create();
+        $session = $this->seedChainedSession(1, $owner);
+
+        Sanctum::actingAs($intruder);
+
+        $this->getJson('/api/v1/evidence/'.$session->id)->assertNotFound();
+    }
+
+    private function seedChainedSession(int $count, User $user, bool $writeFiles = true, string $status = 'finalized'): EvidenceSession
     {
         $session = EvidenceSession::create([
-            'status' => 'finalized',
+            'user_id' => $user->id,
+            'status' => $status,
             'risk_level' => 'unassessed',
             'started_at' => now()->subMinutes(5),
-            'finalized_at' => now(),
+            'finalized_at' => $status === 'finalized' ? now() : null,
         ]);
 
         $previous = self::GENESIS;
+        $storage = app(EvidenceStorageService::class);
 
         for ($sequence = 1; $sequence <= $count; $sequence++) {
-            $chunkHash = hash('sha256', $session->id.':'.$sequence);
+            $payload = $session->id.':'.$sequence;
+            $chunkHash = hash('sha256', $payload);
             $cumulative = hash('sha256', $previous.$chunkHash);
+            $path = sprintf('evidence/%s/chunks/%010d.bin', $session->id, $sequence);
+
+            if ($writeFiles) {
+                $storage->put($path, $payload);
+            }
 
             EvidenceChunk::create([
                 'session_id' => $session->id,
                 'sequence_number' => $sequence,
-                'storage_path' => sprintf('evidence/%s/chunks/%010d.bin', $session->id, $sequence),
-                'byte_size' => 1024 * $sequence,
+                'storage_path' => $path,
+                'byte_size' => strlen($payload),
                 'chunk_hash' => $chunkHash,
                 'cumulative_hash' => $cumulative,
                 'latitude' => -1.2921,

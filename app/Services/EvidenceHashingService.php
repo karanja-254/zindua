@@ -47,6 +47,10 @@ class EvidenceHashingService
         try {
             [$chunkHash, $byteSize] = $this->streamToTemporaryFile($stream, $temporaryPath);
 
+            if ($byteSize === 0) {
+                throw new RuntimeException('Empty evidence chunk rejected.');
+            }
+
             $chunk = DB::transaction(function () use ($session, $temporaryPath, $chunkHash, $byteSize, $metadata): EvidenceChunk {
                 $session->refresh();
 

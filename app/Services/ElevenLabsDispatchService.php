@@ -9,13 +9,16 @@ use App\Models\EvidenceSession;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 class ElevenLabsDispatchService
 {
     private const API_BASE = 'https://api.elevenlabs.io/v1/text-to-speech';
 
     private const EAT_TIMEZONE = 'Africa/Nairobi';
+
+    public function __construct(private readonly EvidenceStorageService $storage)
+    {
+    }
 
     /**
      * Synthesize a concise emergency voice briefing via ElevenLabs TTS and persist
@@ -74,7 +77,7 @@ class ElevenLabsDispatchService
         $storagePath = sprintf('evidence/%s/briefings/%010d.mp3', $session->id, $chunk->sequence_number);
 
         try {
-            $saved = Storage::disk('s3')->put($storagePath, $response->body());
+            $saved = $this->storage->put($storagePath, $response->body());
         } catch (\Throwable $exception) {
             Log::error('Failed to persist ElevenLabs briefing to storage.', [
                 'session_id' => $session->id,

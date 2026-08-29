@@ -26,7 +26,7 @@ return [
     |
     */
 
-    'evidence_disk' => env('EVIDENCE_DISK', 's3'),
+    'evidence_disk' => env('EVIDENCE_DISK', 'local'),
 
     /*
     |--------------------------------------------------------------------------

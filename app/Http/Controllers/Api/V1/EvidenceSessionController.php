@@ -6,12 +6,16 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\BroadcastTelegramAlertJob;
+use App\Jobs\DispatchSmsAlertJob;
+use App\Jobs\DispatchVoiceBriefingJob;
 use App\Models\AuditLog;
 use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
+use App\Models\User;
 use App\Services\EvidenceMediaService;
 use App\Services\EvidenceStorageService;
 use App\Services\ForensicReportService;
+use App\Services\SmsDispatchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -27,7 +31,11 @@ class EvidenceSessionController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $sessions = EvidenceSession::query()
+        $user = $request->user();
+        abort_if(! $user instanceof User, Response::HTTP_UNAUTHORIZED);
+        $owned = EvidenceSession::query()->ownedBy($user);
+
+        $sessions = (clone $owned)
             ->withCount('chunks')
             ->orderByDesc('created_at')
             ->paginate(15);
@@ -40,11 +48,11 @@ class EvidenceSessionController extends Controller
 
         $payload = $sessions->toArray();
         $payload['stats'] = [
-            'total' => EvidenceSession::query()->count(),
-            'high' => EvidenceSession::query()->where('risk_level', 'high')->count(),
-            'medium' => EvidenceSession::query()->where('risk_level', 'medium')->count(),
-            'low' => EvidenceSession::query()->where('risk_level', 'low')->count(),
-            'storage' => EvidenceSession::query()->where('status', 'active')->exists()
+            'total' => (clone $owned)->count(),
+            'high' => (clone $owned)->where('risk_level', 'high')->count(),
+            'medium' => (clone $owned)->where('risk_level', 'medium')->count(),
+            'low' => (clone $owned)->where('risk_level', 'low')->count(),
+            'storage' => (clone $owned)->where('status', 'active')->exists()
                 ? 'active'
                 : 'worm_locked',
         ];
@@ -184,7 +192,7 @@ class EvidenceSessionController extends Controller
      */
     public function finalizeSession(Request $request, string $sessionId): JsonResponse
     {
-        $session = EvidenceSession::findOrFail($sessionId);
+        $session = EvidenceSession::findOwnedOrFail($sessionId, $request->user());
 
         if ($session->status === 'finalized') {
             return response()->json([
@@ -220,7 +228,7 @@ class EvidenceSessionController extends Controller
     {
         $session = EvidenceSession::with([
             'chunks' => fn ($query) => $query->orderBy('sequence_number'),
-        ])->findOrFail($sessionId);
+        ])->whereKey($sessionId)->ownedBy($request->user())->firstOrFail();
 
         $expiresAt = now()->addMinutes(5);
 
@@ -250,9 +258,9 @@ class EvidenceSessionController extends Controller
     /**
      * Signed sequential playback manifest for continuous player fallback.
      */
-    public function playbackManifest(string $sessionId, EvidenceMediaService $media): JsonResponse
+    public function playbackManifest(Request $request, string $sessionId, EvidenceMediaService $media): JsonResponse
     {
-        $session = EvidenceSession::findOrFail($sessionId);
+        $session = EvidenceSession::findOwnedOrFail($sessionId, $request->user());
 
         return response()->json($media->getPlaybackManifest($session), Response::HTTP_OK, [
             'Cache-Control' => 'no-store, no-cache, must-revalidate, private',
@@ -263,9 +271,9 @@ class EvidenceSessionController extends Controller
     /**
      * Recompute SHA-256 of each stored chunk and the cumulative chain from genesis.
      */
-    public function verifyIntegrity(string $sessionId, ForensicReportService $reports): JsonResponse
+    public function verifyIntegrity(Request $request, string $sessionId, ForensicReportService $reports): JsonResponse
     {
-        $session = EvidenceSession::findOrFail($sessionId);
+        $session = EvidenceSession::findOwnedOrFail($sessionId, $request->user());
 
         $verdict = $reports->verifyIntegrity($session);
 
@@ -287,7 +295,7 @@ class EvidenceSessionController extends Controller
      */
     public function exportPackage(Request $request, string $sessionId, ForensicReportService $reports): BinaryFileResponse
     {
-        $session = EvidenceSession::findOrFail($sessionId);
+        $session = EvidenceSession::findOwnedOrFail($sessionId, $request->user());
 
         AuditLog::create([
             'session_id' => $session->id,
@@ -311,7 +319,7 @@ class EvidenceSessionController extends Controller
         ]);
 
         $reason = (string) ($data['reason'] ?? $data['override_reason'] ?? 'Investigator amended AI risk assessment.');
-        $session = EvidenceSession::query()->findOrFail($sessionId);
+        $session = EvidenceSession::findOwnedOrFail($sessionId, $request->user());
         $previousRiskLevel = (string) $session->risk_level;
         $session->update(['risk_level' => $data['risk_level']]);
 
@@ -328,16 +336,34 @@ class EvidenceSessionController extends Controller
         ]);
 
         if ($data['risk_level'] === 'high') {
+            $session->loadMissing('chunks');
+            $chunk = $session->chunks->sortByDesc('sequence_number')->first();
+            $indicators = [
+                'weapon' => 1.0,
+                'violence' => 1.0,
+                'acoustic_distress' => 1.0,
+                'reason' => $reason,
+                'risk_level' => 'high',
+            ];
+
             try {
-                BroadcastTelegramAlertJob::dispatch($session->fresh() ?? $session, null, [
-                    'weapon' => 1.0,
-                    'violence' => 1.0,
-                    'acoustic_distress' => 1.0,
-                    'reason' => $reason,
-                    'risk_level' => 'high',
-                ]);
+                BroadcastTelegramAlertJob::dispatch($session->fresh() ?? $session, $chunk, $indicators);
             } catch (\Throwable) {
                 // Telegram dispatch must never block the override response.
+            }
+
+            if ($chunk !== null) {
+                try {
+                    DispatchVoiceBriefingJob::dispatch($session, $chunk, $indicators);
+                } catch (\Throwable) {
+                    // Voice briefing is best-effort.
+                }
+
+                try {
+                    DispatchSmsAlertJob::dispatch($session, $chunk);
+                } catch (\Throwable) {
+                    // SMS is best-effort.
+                }
             }
         }
 
@@ -361,9 +387,9 @@ class EvidenceSessionController extends Controller
     /**
      * Authenticated media stream for a stored chunk (local replica, then cloud).
      */
-    public function streamChunk(string $sessionId, int $sequence): Response
+    public function streamChunk(Request $request, string $sessionId, int $sequence): Response
     {
-        $session = EvidenceSession::findOrFail($sessionId);
+        $session = EvidenceSession::findOwnedOrFail($sessionId, $request->user());
         $chunk = EvidenceChunk::query()
             ->where('session_id', $session->id)
             ->where('sequence_number', $sequence)
@@ -376,6 +402,45 @@ class EvidenceSessionController extends Controller
         }
 
         return $this->storage->stream($path, basename($path), $chunk->mimeType());
+    }
+
+    /**
+     * One-time SMS access code: confirms the incident without issuing a vault token.
+     */
+    public function redeemEmergencyAccess(Request $request, SmsDispatchService $sms): JsonResponse
+    {
+        $data = $request->validate([
+            'code' => ['required', 'string', 'min:6', 'max:16'],
+        ]);
+
+        $payload = $sms->redeemToken((string) $data['code']);
+
+        if ($payload === null) {
+            return response()->json([
+                'error' => 'Invalid or expired access code.',
+            ], Response::HTTP_UNAUTHORIZED);
+        }
+
+        $session = EvidenceSession::query()->find($payload['session_id'] ?? null);
+
+        if ($session === null) {
+            return response()->json([
+                'error' => 'Invalid or expired access code.',
+            ], Response::HTTP_UNAUTHORIZED);
+        }
+
+        $chunk = $session->chunks()->orderByDesc('sequence_number')->first();
+
+        return response()->json([
+            'ok' => true,
+            'evidence_id' => $session->evidenceId(),
+            'session_id' => $session->id,
+            'risk_level' => $session->risk_level,
+            'gps' => [
+                'latitude' => $chunk?->latitude,
+                'longitude' => $chunk?->longitude,
+            ],
+        ], Response::HTTP_OK);
     }
 
     /**

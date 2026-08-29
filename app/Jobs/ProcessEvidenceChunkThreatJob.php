@@ -10,6 +10,7 @@ use App\Services\GeminiThreatAnalysisService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use App\Jobs\Concerns\UsesThreatAnalysisQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
@@ -19,6 +20,7 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
+    use UsesThreatAnalysisQueue;
 
     /**
      * The number of times the job may be attempted.
@@ -32,11 +34,7 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
 
     public function __construct(public readonly EvidenceChunk $chunk)
     {
-        // Dispatch to the threat-analysis queue on whatever connection the
-        // environment has configured. Hard-coding 'redis' here silently swallows
-        // jobs when QUEUE_CONNECTION=database (the default local dev setting).
-        $connection = config('queue.default', 'sync');
-        $this->onConnection((string) $connection)->onQueue('threat-analysis');
+        $this->onThreatQueue();
     }
 
     /**
@@ -98,12 +96,31 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
             return;
         }
 
+        $alreadyHigh = $session->risk_level === 'high';
         $this->escalateSessionRisk($session, 'high');
 
+        if ($alreadyHigh) {
+            return;
+        }
+
+        $session = $session->fresh() ?? $session;
+
         try {
-            BroadcastTelegramAlertJob::dispatch($session->fresh() ?? $session);
+            BroadcastTelegramAlertJob::dispatch($session, $chunk, $payload);
         } catch (\Throwable) {
             // Queue/API failures must not unwind chunk ingest.
+        }
+
+        try {
+            DispatchVoiceBriefingJob::dispatch($session, $chunk, $indicators);
+        } catch (\Throwable) {
+            // Voice briefing is best-effort.
+        }
+
+        try {
+            DispatchSmsAlertJob::dispatch($session, $chunk);
+        } catch (\Throwable) {
+            // SMS is best-effort.
         }
     }
 
@@ -124,96 +141,15 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
             }
         }
 
-        $indicators = $this->runThreatAssessment($chunk);
-        $riskLevel = $this->deriveRiskLevel($indicators);
-        $reason = $this->explainRisk($indicators, $riskLevel);
-
         return [
-            ...$indicators,
-            'risk_level' => $riskLevel,
-            'reason' => $reason,
-            'confidence' => max($indicators),
-            'source' => 'heuristic',
+            'weapon' => 0.0,
+            'violence' => 0.0,
+            'acoustic_distress' => 0.0,
+            'risk_level' => 'unassessed',
+            'reason' => 'Automated threat scoring was unavailable; evidence was stored without an AI verdict.',
+            'confidence' => 0.0,
+            'source' => 'unavailable',
         ];
-    }
-
-    /**
-     * Simulated multi-model inference across weapon, violence, and acoustic distress signals.
-     *
-     * @return array{weapon: float, violence: float, acoustic_distress: float}
-     */
-    private function runThreatAssessment(EvidenceChunk $chunk): array
-    {
-        $seed = hexdec(substr($chunk->chunk_hash, 0, 8));
-        mt_srand($seed);
-
-        $score = static fn (): float => round(mt_rand(0, 10000) / 10000, 4);
-
-        return [
-            'weapon' => $score(),
-            'violence' => $score(),
-            'acoustic_distress' => $score(),
-        ];
-    }
-
-    /**
-     * Collapse the indicator scores into a single risk tier.
-     *
-     * @param  array{weapon: float, violence: float, acoustic_distress: float}  $indicators
-     */
-    private function deriveRiskLevel(array $indicators): string
-    {
-        $peak = max($indicators);
-
-        return match (true) {
-            $peak >= 0.70 => 'high',
-            $peak >= 0.6 => 'medium',
-            $peak >= 0.3 => 'low',
-            default => 'unassessed',
-        };
-    }
-
-    /**
-     * Produce a human-readable detection summary for the forensic ledger and alerts.
-     *
-     * @param  array{weapon: float, violence: float, acoustic_distress: float}  $indicators
-     */
-    private function explainRisk(array $indicators, string $riskLevel): string
-    {
-        $weapon = (int) round(($indicators['weapon'] ?? 0) * 100);
-        $violence = (int) round(($indicators['violence'] ?? 0) * 100);
-        $distress = (int) round(($indicators['acoustic_distress'] ?? 0) * 100);
-        $confidence = max($weapon, $violence, $distress);
-
-        $signals = [];
-
-        if ($weapon >= 60) {
-            $signals[] = 'Possible weapon detected';
-        }
-        if ($violence >= 60) {
-            $signals[] = 'physical confrontation visible';
-        }
-        if ($distress >= 60) {
-            $signals[] = 'acoustic distress signatures present';
-        }
-
-        if ($signals === []) {
-            return match ($riskLevel) {
-                'high' => sprintf('Elevated multi-modal threat indicators. Confidence: %d%%', $confidence),
-                'medium' => sprintf('Moderate anomaly detected across visual/audio channels. Confidence: %d%%', $confidence),
-                'low' => sprintf('Low-level environmental activity recorded. Confidence: %d%%', $confidence),
-                default => 'No significant threat indicators at this time.',
-            };
-        }
-
-        $joined = $signals[0];
-        $rest = array_slice($signals, 1);
-
-        if ($rest !== []) {
-            $joined .= ' and '.implode(' and ', $rest);
-        }
-
-        return sprintf('%s. Confidence: %d%%', $joined, $confidence);
     }
 
     /**

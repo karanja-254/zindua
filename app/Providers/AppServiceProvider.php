@@ -40,5 +40,13 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('emergency-ingest', function (Request $request): Limit {
             return Limit::perDay(4)->by($request->ip());
         });
+
+        RateLimiter::for('vault-auth', function (Request $request): Limit {
+            return Limit::perMinute(5)->by($request->ip());
+        });
+
+        RateLimiter::for('vault-register', function (Request $request): Limit {
+            return Limit::perHour(5)->by($request->ip());
+        });
     }
 }

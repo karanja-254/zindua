@@ -29,15 +29,22 @@ class SetTelegramWebhookCommand extends Command
             return self::FAILURE;
         }
 
-        $url = (string) ($this->argument('url') ?: 'https://vault.karanja.online/api/v1/telegram/webhook');
+        $url = (string) ($this->argument('url') ?: rtrim((string) config('app.url'), '/').'/api/v1/telegram/webhook');
+        $secret = config('services.telegram.webhook_secret');
+
+        $payload = [
+            'url' => $url,
+            'allowed_updates' => ['message', 'edited_message', 'channel_post', 'edited_channel_post'],
+        ];
+
+        if (is_string($secret) && trim($secret) !== '') {
+            $payload['secret_token'] = $secret;
+        }
 
         try {
             $response = Http::asJson()
                 ->timeout(20)
-                ->post(sprintf('https://api.telegram.org/bot%s/setWebhook', $token), [
-                    'url' => $url,
-                    'allowed_updates' => ['message', 'edited_message', 'channel_post', 'edited_channel_post'],
-                ]);
+                ->post(sprintf('https://api.telegram.org/bot%s/setWebhook', $token), $payload);
         } catch (\Throwable $exception) {
             $this->error('Webhook registration failed: '.$exception->getMessage());
 

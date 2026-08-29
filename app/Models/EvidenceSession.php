@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -51,6 +52,20 @@ class EvidenceSession extends Model
         $suffix = strtoupper(substr(str_replace('-', '', (string) $this->id), 0, 4));
 
         return sprintf('PV-%s-%s', $date, $suffix);
+    }
+
+    /**
+     * @param  Builder<static>  $query
+     * @return Builder<static>
+     */
+    public function scopeOwnedBy(Builder $query, User $user): Builder
+    {
+        return $query->where('user_id', $user->id);
+    }
+
+    public static function findOwnedOrFail(string $id, User $user): self
+    {
+        return static::query()->whereKey($id)->ownedBy($user)->firstOrFail();
     }
 
     /**

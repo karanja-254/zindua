@@ -27,6 +27,10 @@ RUN apk add --no-cache \
         nginx \
         supervisor \
         bash \
+        ffmpeg \
+        freetype-dev \
+        libjpeg-turbo-dev \
+        libpng-dev \
         icu-dev \
         libzip-dev \
         oniguruma-dev \
@@ -34,6 +38,7 @@ RUN apk add --no-cache \
         sqlite-dev \
         postgresql-dev \
         $PHPIZE_DEPS \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j"$(nproc)" \
         bcmath \
         intl \
@@ -43,6 +48,7 @@ RUN apk add --no-cache \
         pgsql \
         pdo_sqlite \
         zip \
+        gd \
         opcache \
     && pecl install redis \
     && docker-php-ext-enable redis \

@@ -49,25 +49,12 @@ export async function unlockVault(keycode) {
 }
 
 /**
- * Open a new evidence session and return its server-minted UUID.
+ * Public ingest is disabled. Use startAuthenticatedSession(token).
  *
- * @returns {Promise<string>} the session id
+ * @returns {Promise<string>}
  */
 export async function startSession() {
-    const response = await fetch(`${API_BASE}/session/start`, {
-        method: 'POST',
-        headers: {
-            Accept: 'application/json',
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error(`Failed to start session (${response.status})`);
-    }
-
-    const payload = await response.json();
-
-    return payload.session_id;
+    throw new Error('Public session start is disabled. Unlock the vault and use an authenticated session.');
 }
 
 /**
@@ -104,11 +91,13 @@ export async function startAuthenticatedSession(token) {
  * @param {string} sessionId
  * @param {Blob} blob raw media bytes from MediaRecorder
  * @param {{latitude: number|null, longitude: number|null, accuracy: number|null, capturedAt: string}} geoData
+ * @param {string} token Sanctum bearer token
  * @returns {Promise<Response>}
  */
-export async function uploadChunk(sessionId, blob, geoData) {
+export async function uploadChunk(sessionId, blob, geoData, token) {
     const headers = {
         Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
         'Content-Type': blob?.type || 'application/octet-stream',
         'X-Captured-At': geoData?.capturedAt ?? new Date().toISOString(),
     };
@@ -148,13 +137,15 @@ export async function uploadChunk(sessionId, blob, geoData) {
  * Seal the session so no further chunks can be appended.
  *
  * @param {string} sessionId
+ * @param {string} token Sanctum bearer token
  * @returns {Promise<Response>}
  */
-export async function finalizeSession(sessionId) {
+export async function finalizeSession(sessionId, token) {
     return fetch(`${API_BASE}/${sessionId}/finalize`, {
         method: 'POST',
         headers: {
             Accept: 'application/json',
+            Authorization: `Bearer ${token}`,
         },
         keepalive: true,
     });

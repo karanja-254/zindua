@@ -16,7 +16,7 @@ class SetMasterKeyCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'vault:set-master-key {key=Kenya123 : The master keycode to hash and store}';
+    protected $signature = 'vault:set-master-key {key : The master keycode to hash and store}';
 
     /**
      * The console command description.
@@ -28,6 +28,12 @@ class SetMasterKeyCommand extends Command
     public function handle(): int
     {
         $key = (string) $this->argument('key');
+
+        if (strlen($key) < 8) {
+            $this->error('Master keycode must be at least 8 characters.');
+
+            return self::FAILURE;
+        }
 
         $user = User::updateOrCreate(
             ['email' => TestUserSeeder::DEFAULT_EMAIL],

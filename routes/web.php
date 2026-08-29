@@ -2,12 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\VaultViewController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', function () {
-    return view('vault');
-});
-
-Route::get('/vault', function () {
-    return view('vault');
-});
+Route::get('/', VaultViewController::class);
+Route::get('/vault', VaultViewController::class);

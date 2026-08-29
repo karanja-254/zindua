@@ -31,6 +31,8 @@
         <env name="SESSION_DRIVER" value="array"/>
         <env name="FILESYSTEM_DISK" value="local"/>
         <env name="EVIDENCE_DISK" value="local"/>
+        <env name="TELEGRAM_WEBHOOK_SECRET" value="test-webhook-secret"/>
+        <env name="GEMINI_MODEL" value="gemini-2.5-flash"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>

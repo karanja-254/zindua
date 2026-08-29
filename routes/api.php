@@ -12,27 +12,28 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Response;
 
-Route::post('/v1/auth/login', [AuthController::class, 'login']);
-Route::post('/v1/auth/unlock', [MasterKeyAuthController::class, 'authenticate']);
-Route::post('/v1/auth/register', [MasterKeyAuthController::class, 'register']);
+Route::post('/v1/auth/login', [AuthController::class, 'login'])
+    ->middleware('throttle:vault-auth');
+Route::post('/v1/auth/unlock', [MasterKeyAuthController::class, 'authenticate'])
+    ->middleware('throttle:vault-auth');
+Route::post('/v1/auth/register', [MasterKeyAuthController::class, 'register'])
+    ->middleware('throttle:vault-register');
 Route::post('/v1/telegram/webhook', [TelegramWebhookController::class, 'handleWebhook']);
 
+Route::post('/v1/evidence/emergency-access', [EvidenceSessionController::class, 'redeemEmergencyAccess'])
+    ->middleware('throttle:vault-auth');
+
 Route::prefix('v1/evidence')->group(function (): void {
-    // Public ingestion endpoints — live evidence stream capture.
-    Route::post('/session/start', [EvidenceSessionController::class, 'startSession'])
-        ->middleware('throttle:emergency-ingest');
-
-    Route::post('/{sessionId}/chunk', [EvidenceChunkController::class, 'uploadChunk']);
-
-    Route::post('/{sessionId}/finalize', [EvidenceSessionController::class, 'finalizeSession']);
-
-    // Authenticated read endpoints — signed links & forensic reports.
     Route::middleware('auth:sanctum')->group(function (): void {
         Route::get('/', [EvidenceSessionController::class, 'index']);
 
         Route::post('/mock', [EvidenceSessionController::class, 'createMockSession']);
 
         Route::post('/session', [EvidenceSessionController::class, 'startSession']);
+
+        Route::post('/{sessionId}/chunk', [EvidenceChunkController::class, 'uploadChunk']);
+
+        Route::post('/{sessionId}/finalize', [EvidenceSessionController::class, 'finalizeSession']);
 
         Route::post('/{sessionId}/upload-file', [EvidenceChunkController::class, 'uploadDirectFile']);
 

@@ -12,7 +12,9 @@ use Symfony\Component\Process\ExecutableFinder;
 
 class GeminiThreatAnalysisService
 {
-    private const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+    private const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+
+    private const MAX_INLINE_BYTES = 12_000_000;
 
     private const PROMPT = 'Analyze this image, video frame, or audio snippet for emergency safety: detect weapons, physical violence, fire, or distress. Return JSON with \'risk_level\' (\'high\', \'medium\', or \'low\'), \'confidence\' (0.0 to 1.0), and \'reason\' (concise description).';
 
@@ -40,10 +42,14 @@ class GeminiThreatAnalysisService
         }
 
         try {
+            $model = trim((string) config('services.gemini.model', 'gemini-2.5-flash')) ?: 'gemini-2.5-flash';
+            $endpoint = sprintf('%s/%s:generateContent', self::API_BASE, $model);
+
             $response = Http::timeout(45)
                 ->acceptJson()
                 ->asJson()
-                ->post(self::ENDPOINT.'?key='.$key, [
+                ->withHeaders(['x-goog-api-key' => $key])
+                ->post($endpoint, [
                     'contents' => [[
                         'parts' => [
                             ['text' => self::PROMPT],
@@ -180,27 +186,43 @@ class GeminiThreatAnalysisService
 
         try {
             $header = (string) fread($stream, 64);
-            $imageMime = $this->detectImageMime($header);
+            $rest = (string) stream_get_contents($stream, self::MAX_INLINE_BYTES);
+            $bytes = $header.$rest;
 
-            if ($imageMime !== null) {
-                $rest = (string) stream_get_contents($stream);
-
-                return ['mime' => $imageMime, 'bytes' => $header.$rest];
+            if ($bytes === '') {
+                return null;
             }
 
-            $audioMime = $this->detectAudioMime($header, (string) $chunk->storage_path);
+            $imageMime = $this->detectImageMime($header);
+            if ($imageMime !== null) {
+                return ['mime' => $imageMime, 'bytes' => $bytes];
+            }
 
+            $audioMime = $this->detectAudioMime($header, (string) $chunk->storage_path, $chunk->mimeType());
             if ($audioMime !== null) {
-                $rest = (string) stream_get_contents($stream);
-                $bytes = $header.$rest;
-                if (strlen($bytes) > 4_000_000) {
-                    $bytes = substr($bytes, 0, 4_000_000);
-                }
-
                 return ['mime' => $audioMime, 'bytes' => $bytes];
             }
 
-            return $this->extractVideoFrame($header, $stream);
+            $videoMime = $this->detectVideoMime($header, (string) $chunk->storage_path, $chunk->mimeType());
+            if ($videoMime !== null) {
+                return ['mime' => $videoMime, 'bytes' => $bytes];
+            }
+
+            $handle = fopen('php://memory', 'r+b');
+            if ($handle === false) {
+                return null;
+            }
+
+            try {
+                fwrite($handle, $bytes);
+                rewind($handle);
+
+                return $this->extractVideoFrame('', $handle);
+            } finally {
+                if (is_resource($handle)) {
+                    fclose($handle);
+                }
+            }
         } finally {
             if (is_resource($stream)) {
                 fclose($stream);
@@ -285,8 +307,12 @@ class GeminiThreatAnalysisService
         return null;
     }
 
-    private function detectAudioMime(string $header, string $path): ?string
+    private function detectAudioMime(string $header, string $path, string $storedMime = ''): ?string
     {
+        if (str_starts_with($storedMime, 'audio/')) {
+            return $storedMime;
+        }
+
         $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
 
         if (in_array($extension, ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'], true)) {
@@ -313,6 +339,22 @@ class GeminiThreatAnalysisService
         }
 
         return null;
+    }
+
+    private function detectVideoMime(string $header, string $path, string $storedMime = ''): ?string
+    {
+        if (str_starts_with($storedMime, 'video/')) {
+            return $storedMime;
+        }
+
+        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+
+        return match ($extension) {
+            'webm' => 'video/webm',
+            'mp4' => 'video/mp4',
+            'mov' => 'video/quicktime',
+            default => str_starts_with($header, "\x1A\x45\xDF\xA3") ? 'video/webm' : null,
+        };
     }
 
     private function ffmpegBinary(): ?string

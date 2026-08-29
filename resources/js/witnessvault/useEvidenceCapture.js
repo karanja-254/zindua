@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { startSession, uploadChunk, finalizeSession } from './api';
+import { startAuthenticatedSession, uploadChunk, finalizeSession } from './api';
 import { enqueueChunk, getAllQueued, deleteQueued, queuedCount } from './offlineQueue';
 import { sha256HexOfBlob } from './sha256';
 
@@ -29,7 +29,9 @@ function readGeo(last) {
     });
 }
 
-export function useEvidenceCapture() {
+export function useEvidenceCapture(token) {
+    const tokenRef = useRef(token);
+    tokenRef.current = token;
     const [mode, setMode] = useState(null); // 'video' | 'audio' | null
     const [isRecording, setIsRecording] = useState(false);
     const [elapsedMs, setElapsedMs] = useState(0);
@@ -72,7 +74,7 @@ export function useEvidenceCapture() {
         }
         setUploadStatus('uploading');
         try {
-            await uploadChunk(sessionId, blob, geo);
+            await uploadChunk(sessionId, blob, geo, tokenRef.current);
             setUploadStatus('ok');
         } catch {
             await enqueueChunk({ sessionId, blob, geo });
@@ -96,7 +98,7 @@ export function useEvidenceCapture() {
                 const item = items[0];
                 try {
                     setUploadStatus('uploading');
-                    await uploadChunk(item.sessionId, item.blob, item.geo);
+                    await uploadChunk(item.sessionId, item.blob, item.geo, tokenRef.current);
                     await deleteQueued(item.id);
                     setUploadStatus('ok');
                     backoff = 1000;
@@ -235,7 +237,10 @@ export function useEvidenceCapture() {
         setError(null);
         setSeized(false);
         try {
-            const sessionId = await startSession();
+            if (!tokenRef.current) {
+                throw new Error('Vault is locked.');
+            }
+            const sessionId = await startAuthenticatedSession(tokenRef.current);
             sessionIdRef.current = sessionId;
 
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -308,13 +313,13 @@ export function useEvidenceCapture() {
 
             const hash = await sha256HexOfBlob(blob);
             const geo = await readGeo(lastGeoRef.current);
-            const activeSession = sessionIdRef.current ?? (await startSession());
+            const activeSession = sessionIdRef.current ?? (await startAuthenticatedSession(tokenRef.current));
 
             setChunkCount((n) => n + 1);
             await dispatchChunk(activeSession, blob, geo);
 
             if (!sessionIdRef.current) {
-                await finalizeSession(activeSession);
+                await finalizeSession(activeSession, tokenRef.current);
             }
 
             return { hash, geo };
@@ -341,7 +346,7 @@ export function useEvidenceCapture() {
         setMode(null);
         if (sessionId) {
             try {
-                await finalizeSession(sessionId);
+                await finalizeSession(sessionId, tokenRef.current);
             } catch {
                 /* server keeps partial stream regardless */
             }

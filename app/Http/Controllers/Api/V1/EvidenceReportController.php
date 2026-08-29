@@ -30,7 +30,10 @@ class EvidenceReportController extends Controller
      */
     public function downloadPdf(Request $request, string $sessionId, ForensicReportService $reports): Response|JsonResponse
     {
-        $session = EvidenceSession::with(['chunks', 'auditLogs', 'user'])->findOrFail($sessionId);
+        $session = EvidenceSession::with(['chunks', 'auditLogs', 'user'])
+            ->whereKey($sessionId)
+            ->ownedBy($request->user())
+            ->firstOrFail();
 
         // Flush any stray output-buffer content accumulated by DomPDF/Blade so
         // it never contaminates the binary PDF stream.

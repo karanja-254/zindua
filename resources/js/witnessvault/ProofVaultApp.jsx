@@ -92,9 +92,8 @@ export default function ProofVaultApp() {
     }, []);
 
     const enterVault = useCallback((payload) => {
+        localStorage.removeItem('pv_token');
         sessionStorage.setItem('vault_token', payload.access_token);
-        sessionStorage.setItem('pv_token', payload.access_token);
-        localStorage.setItem('pv_token', payload.access_token);
         sessionStorage.setItem('vault_user', JSON.stringify(payload.user ?? {}));
         setAuthUser(payload.user ?? {});
         setCode('');
@@ -133,7 +132,7 @@ export default function ProofVaultApp() {
         }
 
         const entry = code.trim();
-        if (entry.length < 4 || senseiName.trim() === '') {
+        if (entry.length < 8 || senseiName.trim() === '') {
             failPlay();
             return;
         }

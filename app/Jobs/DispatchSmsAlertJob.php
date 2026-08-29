@@ -10,6 +10,7 @@ use App\Services\SmsDispatchService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use App\Jobs\Concerns\UsesThreatAnalysisQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
@@ -19,6 +20,7 @@ class DispatchSmsAlertJob implements ShouldQueue
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
+    use UsesThreatAnalysisQueue;
 
     public int $tries = 3;
 
@@ -28,7 +30,7 @@ class DispatchSmsAlertJob implements ShouldQueue
         public readonly EvidenceSession $session,
         public readonly EvidenceChunk $chunk,
     ) {
-        $this->onConnection('redis')->onQueue('threat-analysis');
+        $this->onThreatQueue();
     }
 
     /**

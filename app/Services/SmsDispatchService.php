@@ -71,6 +71,23 @@ class SmsDispatchService
         return $token;
     }
 
+    /**
+     * @return array{session_id: string}|null
+     */
+    public function redeemToken(string $token): ?array
+    {
+        $key = $this->tokenCacheKey(Str::upper(trim($token)));
+        $payload = Cache::get($key);
+
+        if (! is_array($payload) || ($payload['used'] ?? false) === true || empty($payload['session_id'])) {
+            return null;
+        }
+
+        Cache::put($key, [...$payload, 'used' => true], now()->addMinutes(self::TOKEN_TTL_MINUTES));
+
+        return ['session_id' => (string) $payload['session_id']];
+    }
+
     private function tokenCacheKey(string $token): string
     {
         return 'evidence:emergency-token:'.$token;
@@ -115,13 +132,26 @@ class SmsDispatchService
             $payload['from'] = $from;
         }
 
-        $response = Http::asForm()
-            ->withHeaders([
-                'apiKey' => $apiKey,
-                'Accept' => 'application/json',
-            ])
-            ->timeout(15)
-            ->post('https://api.africastalking.com/version1/messaging', $payload);
+        $endpoint = strtolower((string) $username) === 'sandbox'
+            ? 'https://api.sandbox.africastalking.com/version1/messaging'
+            : 'https://api.africastalking.com/version1/messaging';
+
+        try {
+            $response = Http::asForm()
+                ->withHeaders([
+                    'apiKey' => $apiKey,
+                    'Accept' => 'application/json',
+                ])
+                ->timeout(15)
+                ->post($endpoint, $payload);
+        } catch (\Throwable $exception) {
+            Log::error('Africa\'s Talking SMS delivery failed.', [
+                'recipient' => $recipient,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
 
         if ($response->failed()) {
             Log::error('Africa\'s Talking SMS delivery failed.', [

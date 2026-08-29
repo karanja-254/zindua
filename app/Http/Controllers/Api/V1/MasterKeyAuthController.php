@@ -57,7 +57,7 @@ class MasterKeyAuthController extends Controller
     {
         $validated = $request->validate([
             'name' => ['required', 'string', 'min:1', 'max:120'],
-            'keycode' => ['required', 'string', 'min:4', 'max:128'],
+            'keycode' => ['required', 'string', 'min:8', 'max:128'],
         ]);
 
         $keycode = $validated['keycode'];

@@ -11,6 +11,7 @@ use App\Services\TelegramBroadcasterService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use App\Jobs\Concerns\UsesThreatAnalysisQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
@@ -20,6 +21,7 @@ class DispatchVoiceBriefingJob implements ShouldQueue
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
+    use UsesThreatAnalysisQueue;
 
     public int $tries = 3;
 
@@ -33,7 +35,7 @@ class DispatchVoiceBriefingJob implements ShouldQueue
         public readonly EvidenceChunk $chunk,
         public readonly array $aiIndicators,
     ) {
-        $this->onConnection('redis')->onQueue('threat-analysis');
+        $this->onThreatQueue();
     }
 
     /**

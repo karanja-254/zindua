@@ -25,6 +25,35 @@ class EvidenceStorageService
      * Persist a file locally (always) and replicate to the cloud disk when possible.
      * Cloud failures must not fail the upload — local copy is enough to play back.
      */
+    public function put(string $storagePath, string $contents): bool
+    {
+        try {
+            $localOk = $this->localDisk()->put($storagePath, $contents);
+        } catch (\Throwable $exception) {
+            Log::error('Local evidence persist failed.', [
+                'path' => $storagePath,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        if ($localOk !== true) {
+            return false;
+        }
+
+        try {
+            $this->cloudDisk()->put($storagePath, $contents);
+        } catch (\Throwable $exception) {
+            Log::warning('Cloud evidence replica failed; local copy retained.', [
+                'path' => $storagePath,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        return true;
+    }
+
     public function putFromPath(string $storagePath, string $absolutePath): bool
     {
         try {

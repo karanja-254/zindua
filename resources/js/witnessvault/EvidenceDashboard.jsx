@@ -83,9 +83,8 @@ function chunkPlaybackUrl(chunk) {
 
 export default function EvidenceDashboard({ user }) {
     const tokenRef = useRef(
-        localStorage.getItem('pv_token')
-        || sessionStorage.getItem('pv_token')
-        || sessionStorage.getItem('vault_token'),
+        sessionStorage.getItem('vault_token')
+        || sessionStorage.getItem('pv_token'),
     );
 
     const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'light');
@@ -109,7 +108,7 @@ export default function EvidenceDashboard({ user }) {
     const [uploadingFile, setUploadingFile] = useState(false);
     const [overriding, setOverriding] = useState(false);
     const [amendNotice, setAmendNotice] = useState(null);
-    const capture = useEvidenceCapture();
+    const capture = useEvidenceCapture(tokenRef.current);
     const captureRef = useRef(capture);
     captureRef.current = capture;
     const videoRef = useRef(null);
@@ -157,6 +156,7 @@ export default function EvidenceDashboard({ user }) {
         captureRef.current.releaseHardware();
         sessionStorage.removeItem('vault_token');
         sessionStorage.removeItem('pv_token');
+        sessionStorage.removeItem('vault_user');
         localStorage.removeItem('pv_token');
         window.location.reload();
     }, []);
@@ -265,10 +265,9 @@ export default function EvidenceDashboard({ user }) {
     }, [lock]);
 
     const handleDownloadPdf = useCallback(async (sessionId) => {
-        const token = localStorage.getItem('pv_token')
-            || sessionStorage.getItem('pv_token')
+        const token = tokenRef.current
             || sessionStorage.getItem('vault_token')
-            || tokenRef.current;
+            || sessionStorage.getItem('pv_token');
         if (!token) {
             lock();
             return;
@@ -416,9 +415,7 @@ export default function EvidenceDashboard({ user }) {
             // media_url, mime_type, and file_type from the server's chunkMediaFields.
             const payload = await uploadEvidenceFile(token, 'new', file);
             const sessionId = payload.session_id;
-            // Finalize the session so the WORM chain is sealed. The public
-            // /finalize endpoint is used intentionally (no auth required).
-            await finalizeSession(sessionId);
+            await finalizeSession(sessionId, token);
             await loadSessions();
             // Re-open the session to hydrate blob URLs and auto-select the chunk.
             await openSession(sessionId);

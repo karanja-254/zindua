@@ -39,7 +39,7 @@ class ForensicReportService
 
         foreach ($session->chunks as $chunk) {
             $byteHash = $this->hashStoredChunk((string) $chunk->storage_path);
-            $bytesMatch = $byteHash === null || hash_equals($byteHash, (string) $chunk->chunk_hash);
+            $bytesMatch = is_string($byteHash) && hash_equals($byteHash, (string) $chunk->chunk_hash);
             $expectedCumulative = hash('sha256', $previous.$chunk->chunk_hash);
             $chainMatch = hash_equals($expectedCumulative, (string) $chunk->cumulative_hash);
 
@@ -48,7 +48,9 @@ class ForensicReportService
             if (! $rowOk && $tamperedAt === null) {
                 $tamperedAt = (int) $chunk->sequence_number;
                 $reason = ! $bytesMatch
-                    ? sprintf('Stored object SHA-256 mismatch at chunk #%d', $chunk->sequence_number)
+                    ? ($byteHash === null
+                        ? sprintf('Stored object missing at chunk #%d', $chunk->sequence_number)
+                        : sprintf('Stored object SHA-256 mismatch at chunk #%d', $chunk->sequence_number))
                     : sprintf('Cumulative chain break at chunk #%d', $chunk->sequence_number);
             }
 
