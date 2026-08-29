@@ -225,6 +225,10 @@ class TelegramBroadcasterService
                 'body' => $response->body(),
             ]);
 
+            if ($parseMode !== null && $parseMode !== '') {
+                return $this->sendMessage($chatId, $text, null);
+            }
+
             return false;
         }
 
