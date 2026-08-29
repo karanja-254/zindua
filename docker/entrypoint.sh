@@ -69,10 +69,42 @@ if [ "${use_remote_db}" -eq 0 ]; then
     unset DB_USERNAME || true
     unset DB_PASSWORD || true
 else
-    # A leftover sqlite path must never be used as a Postgres/MySQL database name.
+    # Discrete Render env vars (especially a truncated DB_DATABASE) must not
+    # override the parsed DATABASE_URL / DB_URL.
+    if [ -n "${DB_URL:-}" ]; then
+        eval "$(php -r '
+            $u = getenv("DB_URL") ?: "";
+            if ($u === "") { exit(0); }
+            $p = parse_url($u);
+            if (! is_array($p) || empty($p["host"])) { exit(0); }
+            $db = explode("?", ltrim((string) ($p["path"] ?? ""), "/"), 2)[0];
+            $q = [];
+            parse_str((string) ($p["query"] ?? ""), $q);
+            $esc = static fn (string $k, string $v): string => "export ".$k."=".escapeshellarg($v).PHP_EOL;
+            fwrite(STDOUT, $esc("DB_HOST", (string) $p["host"]));
+            if (! empty($p["port"])) {
+                fwrite(STDOUT, $esc("DB_PORT", (string) $p["port"]));
+            }
+            if ($db !== "") {
+                fwrite(STDOUT, $esc("DB_DATABASE", $db));
+            }
+            if (! empty($p["user"])) {
+                fwrite(STDOUT, $esc("DB_USERNAME", (string) $p["user"]));
+            }
+            if (array_key_exists("pass", $p)) {
+                fwrite(STDOUT, $esc("DB_PASSWORD", (string) $p["pass"]));
+            }
+            if (! empty($q["sslmode"])) {
+                fwrite(STDOUT, $esc("DB_SSLMODE", (string) $q["sslmode"]));
+            }
+        ')"
+    fi
     case "${DB_DATABASE:-}" in
         *.sqlite|*.sqlite3|*database/database.sqlite)
             unset DB_DATABASE || true
+            ;;
+        *_)
+            export DB_DATABASE="${DB_DATABASE%_}"
             ;;
     esac
     if [ "${DB_CONNECTION}" = "pgsql" ] && [ -z "${DB_SSLMODE:-}" ]; then
