@@ -22,6 +22,10 @@ class TelegramWebhookController extends Controller
      */
     public function handleWebhook(Request $request, TelegramBroadcasterService $telegram): JsonResponse
     {
+        if (! $this->passesWebhookSecretCheck($request)) {
+            return response()->json(['ok' => false], Response::HTTP_FORBIDDEN);
+        }
+
         $payload = $this->extractTelegramMessage($request);
 
         $text = trim((string) ($payload['text'] ?? $payload['caption'] ?? ''));
@@ -34,6 +38,24 @@ class TelegramWebhookController extends Controller
 
         if ($chatId === null || ! in_array($command, ['/test', '/status', '/stats'], true)) {
             return response()->json(['ok' => true], Response::HTTP_OK);
+        }
+
+        private function passesWebhookSecretCheck(Request $request): bool
+        {
+            $configured = trim((string) config('services.telegram.webhook_secret', ''));
+
+            if ($configured === '') {
+                return true;
+            }
+
+            $provided = trim((string) $request->header('X-Telegram-Bot-Api-Secret-Token', ''));
+            $valid = $provided !== '' && hash_equals($configured, $provided);
+
+            if (! $valid) {
+                Log::warning('Rejected Telegram webhook: invalid or missing secret token.');
+            }
+
+            return $valid;
         }
 
         $total = EvidenceSession::query()->count();

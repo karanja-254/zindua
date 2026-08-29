@@ -13,7 +13,9 @@ use App\Services\EvidenceHashingService;
 use App\Services\EvidenceStorageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -39,6 +41,12 @@ class EvidenceChunkController extends Controller
     public function uploadChunk(Request $request, string $sessionId): JsonResponse
     {
         $session = EvidenceSession::findOrFail($sessionId);
+
+        if (! $this->canIngestIntoSession($request, $session)) {
+            return response()->json([
+                'error' => 'Unauthorized session ingest request.',
+            ], Response::HTTP_FORBIDDEN);
+        }
 
         if ($session->status !== 'active') {
             return response()->json([
@@ -309,5 +317,32 @@ class EvidenceChunkController extends Controller
             str_contains($mime, 'pdf') => 'pdf',
             default => 'bin',
         };
+    }
+
+    private function canIngestIntoSession(Request $request, EvidenceSession $session): bool
+    {
+        $sanctumUser = $request->user('sanctum');
+
+        if ($sanctumUser !== null && $session->user_id !== null && (int) $sanctumUser->id === (int) $session->user_id) {
+            return true;
+        }
+
+        if ($session->user_id !== null) {
+            return false;
+        }
+
+        $providedKey = trim((string) $request->header('X-Session-Ingest-Key', ''));
+        if ($providedKey === '') {
+            return false;
+        }
+
+        $storedHash = Cache::get($this->ingestCacheKey((string) $session->id));
+
+        return is_string($storedHash) && Hash::check($providedKey, $storedHash);
+    }
+
+    private function ingestCacheKey(string $sessionId): string
+    {
+        return 'evidence:ingest-key:'.$sessionId;
     }
 }

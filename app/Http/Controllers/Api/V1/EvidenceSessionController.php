@@ -14,6 +14,9 @@ use App\Services\EvidenceStorageService;
 use App\Services\ForensicReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -158,12 +161,23 @@ class EvidenceSessionController extends Controller
      */
     public function startSession(Request $request): JsonResponse
     {
+        $sanctumUser = $request->user('sanctum');
         $session = EvidenceSession::create([
-            'user_id' => $request->user()?->id,
+            'user_id' => $sanctumUser?->id,
             'status' => 'active',
             'risk_level' => 'unassessed',
             'started_at' => now(),
         ]);
+
+        $ingestKey = null;
+        if ($sanctumUser === null) {
+            $ingestKey = Str::random(48);
+            Cache::put(
+                $this->ingestCacheKey((string) $session->id),
+                Hash::make($ingestKey),
+                now()->addHours(24),
+            );
+        }
 
         AuditLog::create([
             'session_id' => $session->id,
@@ -176,6 +190,7 @@ class EvidenceSessionController extends Controller
             'session_id' => $session->id,
             'status' => $session->status,
             'started_at' => $session->started_at,
+            'ingest_key' => $ingestKey,
         ], Response::HTTP_CREATED);
     }
 
@@ -185,6 +200,12 @@ class EvidenceSessionController extends Controller
     public function finalizeSession(Request $request, string $sessionId): JsonResponse
     {
         $session = EvidenceSession::findOrFail($sessionId);
+
+        if (! $this->canIngestIntoSession($request, $session)) {
+            return response()->json([
+                'error' => 'Unauthorized session ingest request.',
+            ], Response::HTTP_FORBIDDEN);
+        }
 
         if ($session->status === 'finalized') {
             return response()->json([
@@ -196,6 +217,7 @@ class EvidenceSessionController extends Controller
             'status' => 'finalized',
             'finalized_at' => now(),
         ])->save();
+        Cache::forget($this->ingestCacheKey((string) $session->id));
 
         AuditLog::create([
             'session_id' => $session->id,
@@ -402,5 +424,32 @@ class EvidenceSessionController extends Controller
             'mime_type' => $chunk->mimeType(),
             'file_type' => $chunk->fileType(),
         ];
+    }
+
+    private function canIngestIntoSession(Request $request, EvidenceSession $session): bool
+    {
+        $sanctumUser = $request->user('sanctum');
+
+        if ($sanctumUser !== null && $session->user_id !== null && (int) $sanctumUser->id === (int) $session->user_id) {
+            return true;
+        }
+
+        if ($session->user_id !== null) {
+            return false;
+        }
+
+        $providedKey = trim((string) $request->header('X-Session-Ingest-Key', ''));
+        if ($providedKey === '') {
+            return false;
+        }
+
+        $storedHash = Cache::get($this->ingestCacheKey((string) $session->id));
+
+        return is_string($storedHash) && Hash::check($providedKey, $storedHash);
+    }
+
+    private function ingestCacheKey(string $sessionId): string
+    {
+        return 'evidence:ingest-key:'.$sessionId;
     }
 }

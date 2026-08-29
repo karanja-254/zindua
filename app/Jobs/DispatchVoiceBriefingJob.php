@@ -33,7 +33,8 @@ class DispatchVoiceBriefingJob implements ShouldQueue
         public readonly EvidenceChunk $chunk,
         public readonly array $aiIndicators,
     ) {
-        $this->onConnection('redis')->onQueue('threat-analysis');
+        $connection = config('queue.default', 'sync');
+        $this->onConnection((string) $connection)->onQueue('threat-analysis');
     }
 
     /**
