@@ -32,11 +32,15 @@ RUN apk add --no-cache \
         oniguruma-dev \
         sqlite \
         sqlite-dev \
+        postgresql-dev \
         $PHPIZE_DEPS \
     && docker-php-ext-install -j"$(nproc)" \
         bcmath \
         intl \
+        pcntl \
         pdo_mysql \
+        pdo_pgsql \
+        pgsql \
         pdo_sqlite \
         zip \
         opcache \
