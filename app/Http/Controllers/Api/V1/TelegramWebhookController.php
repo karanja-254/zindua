@@ -22,19 +22,17 @@ class TelegramWebhookController extends Controller
      */
     public function handleWebhook(Request $request, TelegramBroadcasterService $telegram): JsonResponse
     {
-        $message = (string) (
-            $request->input('message.text')
-            ?? $request->input('edited_message.text')
-            ?? $request->input('channel_post.text')
-            ?? ''
-        );
-        $chatId = $request->input('message.chat.id')
-            ?? $request->input('edited_message.chat.id')
-            ?? $request->input('channel_post.chat.id');
+        $payload = $request->input('message') ?? $request->input('channel_post') ?? [];
+        if (! is_array($payload)) {
+            $payload = [];
+        }
 
-        $isStatusCommand = str_starts_with($message, '/test')
-            || str_starts_with($message, '/status')
-            || str_starts_with($message, '/stats');
+        $text = trim((string) ($payload['text'] ?? $payload['caption'] ?? ''));
+        $chatId = $payload['chat']['id'] ?? null;
+
+        $isStatusCommand = str_starts_with($text, '/test')
+            || str_starts_with($text, '/status')
+            || str_starts_with($text, '/stats');
 
         if ($chatId !== null && $isStatusCommand) {
             $total  = EvidenceSession::query()->count();
