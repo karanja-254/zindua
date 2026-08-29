@@ -219,7 +219,15 @@ class EvidenceChunkController extends Controller
     }
 
     /**
-     * @return array{media_url: string|null, mime_type: string, file_type: string, signed_url: string|null}
+     * Resolve all accessible read URLs for a stored chunk.
+     *
+     * R2 disks are configured with 'throw' => true which means credentials
+     * failures propagate through exists(), temporaryUrl(), and url(). Each
+     * call is independently guarded and the authenticated proxy URL is always
+     * returned as the final non-null fallback so the investigator player has
+     * something to attempt even before a signed-URL window opens.
+     *
+     * @return array{media_url: string, mime_type: string, file_type: string, signed_url: string|null}
      */
     private function chunkMediaFields(EvidenceChunk $chunk, EvidenceSession $session): array
     {
@@ -227,25 +235,26 @@ class EvidenceChunkController extends Controller
         $signedUrl = null;
 
         try {
-            $signedUrl = $disk->temporaryUrl($chunk->storage_path, now()->addMinutes(5));
+            $signedUrl = $disk->temporaryUrl((string) $chunk->storage_path, now()->addMinutes(5));
         } catch (\Throwable) {
             $signedUrl = null;
         }
 
-        $proxyUrl = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
+        // Authenticated proxy URL always works regardless of R2 availability.
+        $proxyUrl = url('/api/v1/evidence/' . $session->id . '/chunks/' . $chunk->sequence_number . '/media');
         $directUrl = null;
 
         try {
-            $directUrl = $disk->url($chunk->storage_path);
+            $directUrl = $disk->url((string) $chunk->storage_path);
         } catch (\Throwable) {
             $directUrl = null;
         }
 
         return [
             'signed_url' => $signedUrl,
-            'media_url' => $signedUrl ?? $directUrl ?? $proxyUrl,
-            'mime_type' => $chunk->mimeType(),
-            'file_type' => $chunk->fileType(),
+            'media_url'  => $signedUrl ?? $directUrl ?? $proxyUrl,
+            'mime_type'  => $chunk->mimeType(),
+            'file_type'  => $chunk->fileType(),
         ];
     }
 

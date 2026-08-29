@@ -239,15 +239,26 @@ export default function EvidenceDashboard({ user }) {
             const hydrated = [];
             for (const chunk of payload.chunks ?? []) {
                 let playback = chunk.signed_url || chunk.media_url || null;
+                // Only attempt an authenticated fetch for chunks that actually
+                // have a stored binary. Skipping has_binary=false avoids 404s
+                // for mock sessions (mathematical ledger only, no object on R2).
                 if (chunk.has_binary) {
                     const proxyUrl = `/api/v1/evidence/${sessionId}/chunks/${chunk.sequence_number}/media`;
-                    const fetchUrl = String(chunk.media_url ?? '').includes('/api/v1/evidence/')
-                        ? chunk.media_url
-                        : proxyUrl;
-                    const blobUrl = await fetchAuthorizedMediaUrl(token, fetchUrl);
-                    if (blobUrl) {
-                        blobUrlsRef.current.push(blobUrl);
-                        playback = blobUrl;
+                    // Prefer the already-resolved media_url when it isn't the
+                    // proxy itself (i.e. it's a signed R2 URL) — use it directly.
+                    const isSignedUrl = String(chunk.media_url ?? '').startsWith('https://') &&
+                        !String(chunk.media_url ?? '').includes('/api/v1/evidence/');
+                    if (isSignedUrl && chunk.media_url) {
+                        playback = chunk.media_url;
+                    } else {
+                        const fetchUrl = String(chunk.media_url ?? '').includes('/api/v1/evidence/')
+                            ? chunk.media_url
+                            : proxyUrl;
+                        const blobUrl = await fetchAuthorizedMediaUrl(token, fetchUrl);
+                        if (blobUrl) {
+                            blobUrlsRef.current.push(blobUrl);
+                            playback = blobUrl;
+                        }
                     }
                 }
                 hydrated.push({
@@ -288,13 +299,25 @@ export default function EvidenceDashboard({ user }) {
             });
 
             if (!response.ok) {
-                throw new Error(`Failed to generate PDF: ${response.statusText}`);
+                // Surface the server error message rather than a generic string.
+                let serverMsg = `Failed to generate PDF: ${response.statusText}`;
+                try {
+                    const errJson = await response.json();
+                    serverMsg = errJson.error ?? errJson.message ?? serverMsg;
+                } catch (_) { /* binary or non-JSON body */ }
+                throw new Error(serverMsg);
             }
 
             const blob = await response.blob();
-            const header = await blob.slice(0, 5).text();
-            if (!blob.size || !header.startsWith('%PDF')) {
-                throw new Error('Failed to fetch forensic PDF (server returned HTML or an empty payload).');
+
+            // Use ArrayBuffer for cross-browser reliable magic-byte validation.
+            // blob.slice().text() can return garbled bytes in Firefox/Safari on
+            // binary data because text() applies UTF-8 decoding.
+            const headerBuf = await blob.slice(0, 5).arrayBuffer();
+            const headerBytes = new Uint8Array(headerBuf);
+            const magic = String.fromCharCode(...headerBytes);
+            if (!blob.size || !magic.startsWith('%PDF')) {
+                throw new Error('Server returned an invalid PDF payload. Try again or contact support.');
             }
 
             const url = window.URL.createObjectURL(blob);
@@ -404,10 +427,15 @@ export default function EvidenceDashboard({ user }) {
         }
         setUploadingFile(true);
         try {
+            // uploadEvidenceFile returns the chunk payload including session_id,
+            // media_url, mime_type, and file_type from the server's chunkMediaFields.
             const payload = await uploadEvidenceFile(token, 'new', file);
             const sessionId = payload.session_id;
+            // Finalize the session so the WORM chain is sealed. The public
+            // /finalize endpoint is used intentionally (no auth required).
             await finalizeSession(sessionId);
             await loadSessions();
+            // Re-open the session to hydrate blob URLs and auto-select the chunk.
             await openSession(sessionId);
         } catch (err) {
             setError(err.message);

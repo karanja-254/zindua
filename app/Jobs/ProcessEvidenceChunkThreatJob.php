@@ -32,7 +32,11 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
 
     public function __construct(public readonly EvidenceChunk $chunk)
     {
-        $this->onConnection('redis')->onQueue('threat-analysis');
+        // Dispatch to the threat-analysis queue on whatever connection the
+        // environment has configured. Hard-coding 'redis' here silently swallows
+        // jobs when QUEUE_CONNECTION=database (the default local dev setting).
+        $connection = config('queue.default', 'sync');
+        $this->onConnection((string) $connection)->onQueue('threat-analysis');
     }
 
     /**

@@ -19,7 +19,20 @@ class AuditLog extends Model
         'actor_ip',
         'user_agent',
         'action',
+        'metadata',
     ];
+
+    /**
+     * Get the attributes that should be cast.
+     *
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'metadata' => 'array',
+        ];
+    }
 
     /**
      * @return BelongsTo<EvidenceSession, $this>

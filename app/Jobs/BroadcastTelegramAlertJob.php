@@ -33,7 +33,10 @@ class BroadcastTelegramAlertJob implements ShouldQueue
         public readonly ?EvidenceChunk $chunk = null,
         public readonly array $aiIndicators = [],
     ) {
-        $this->onConnection('redis')->onQueue('threat-analysis');
+        // Use the environment-configured queue connection so this job dispatches
+        // correctly on both database (local) and redis (production) drivers.
+        $connection = config('queue.default', 'sync');
+        $this->onConnection((string) $connection)->onQueue('threat-analysis');
     }
 
     /**

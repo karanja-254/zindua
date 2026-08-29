@@ -312,13 +312,19 @@ class EvidenceSessionController extends Controller
 
         $reason = (string) ($data['reason'] ?? $data['override_reason'] ?? 'Investigator amended AI risk assessment.');
         $session = EvidenceSession::query()->findOrFail($sessionId);
+        $previousRiskLevel = (string) $session->risk_level;
         $session->update(['risk_level' => $data['risk_level']]);
 
         AuditLog::create([
             'session_id' => $session->id,
-            'actor_ip' => $request->ip(),
+            'actor_ip'   => $request->ip(),
             'user_agent' => $request->userAgent(),
-            'action' => 'risk.manually_amended',
+            'action'     => 'risk.manually_amended',
+            'metadata'   => [
+                'risk_level'  => $data['risk_level'],
+                'reason'      => $reason,
+                'previous_risk_level' => $previousRiskLevel,
+            ],
         ]);
 
         if ($data['risk_level'] === 'high') {
@@ -387,10 +393,14 @@ class EvidenceSessionController extends Controller
      */
     private function serializeChunkPayload(EvidenceChunk $chunk, EvidenceSession $session, Filesystem $disk, DateTimeInterface $expiresAt): array
     {
+        // R2/S3 disks configured with 'throw' => true will propagate on every
+        // storage call when credentials are invalid or the object is absent.
+        // All three operations (exists, temporaryUrl, url) must be independently
+        // guarded so a single failure does not bubble through the entire show().
         $exists = false;
 
         try {
-            $exists = $disk->exists($chunk->storage_path);
+            $exists = $disk->exists((string) $chunk->storage_path);
         } catch (\Throwable) {
             $exists = false;
         }
@@ -399,41 +409,46 @@ class EvidenceSessionController extends Controller
 
         if ($exists) {
             try {
-                $signedUrl = $disk->temporaryUrl($chunk->storage_path, $expiresAt);
+                $signedUrl = $disk->temporaryUrl((string) $chunk->storage_path, $expiresAt);
             } catch (\Throwable) {
                 $signedUrl = null;
             }
         }
 
-        $proxyUrl = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
+        // Always compute the proxy URL — it works even when R2 is unreachable
+        // because it is served by this application via the streamChunk action.
+        $proxyUrl = url('/api/v1/evidence/' . $session->id . '/chunks/' . $chunk->sequence_number . '/media');
         $directUrl = null;
 
         if ($exists) {
             try {
-                $directUrl = $disk->url($chunk->storage_path);
+                $directUrl = $disk->url((string) $chunk->storage_path);
             } catch (\Throwable) {
                 $directUrl = null;
             }
         }
 
-        $mediaUrl = $signedUrl ?? $directUrl ?? ($exists ? $proxyUrl : null);
+        // Preference order: signed (expiring) → direct public → authenticated proxy.
+        // The proxy URL is always returned as a final fallback so the investigator
+        // player always has a URL to attempt, even for mock sessions without binaries.
+        $mediaUrl = $signedUrl ?? $directUrl ?? ($exists ? $proxyUrl : $proxyUrl);
 
         return [
-            'sequence_number' => $chunk->sequence_number,
-            'storage_path' => $chunk->storage_path,
-            'byte_size' => $chunk->byte_size,
-            'chunk_hash' => $chunk->chunk_hash,
-            'cumulative_hash' => $chunk->cumulative_hash,
-            'captured_at' => $chunk->captured_at,
-            'latitude' => $chunk->latitude,
-            'longitude' => $chunk->longitude,
-            'accuracy_meters' => $chunk->accuracy_meters,
+            'sequence_number'     => $chunk->sequence_number,
+            'storage_path'        => $chunk->storage_path,
+            'byte_size'           => $chunk->byte_size,
+            'chunk_hash'          => $chunk->chunk_hash,
+            'cumulative_hash'     => $chunk->cumulative_hash,
+            'captured_at'         => $chunk->captured_at,
+            'latitude'            => $chunk->latitude,
+            'longitude'           => $chunk->longitude,
+            'accuracy_meters'     => $chunk->accuracy_meters,
             'ai_threat_indicators' => $chunk->ai_threat_indicators,
-            'has_binary' => $exists,
-            'signed_url' => $signedUrl,
-            'media_url' => $mediaUrl,
-            'mime_type' => $chunk->mimeType(),
-            'file_type' => $chunk->fileType(),
+            'has_binary'          => $exists,
+            'signed_url'          => $signedUrl,
+            'media_url'           => $mediaUrl,
+            'mime_type'           => $chunk->mimeType(),
+            'file_type'           => $chunk->fileType(),
         ];
     }
 }
