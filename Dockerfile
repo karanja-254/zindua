@@ -36,12 +36,14 @@ RUN apk add --no-cache \
 
 WORKDIR /var/www/html
 
+COPY --from=composer:2.7 /usr/bin/composer /usr/local/bin/composer
+RUN chmod +x /usr/local/bin/composer
+
 # Application source + pre-resolved vendor directory.
 COPY . .
 COPY --from=vendor /app/vendor ./vendor
 
-# Regenerate the optimized autoloader and run package discovery now that the full
-# source tree is present.
+# Regenerate the optimized autoloader now that the full source tree is present.
 RUN composer dump-autoload --no-dev --optimize --classmap-authoritative \
     && chown -R www-data:www-data storage bootstrap/cache \
     && chmod -R 775 storage bootstrap/cache
