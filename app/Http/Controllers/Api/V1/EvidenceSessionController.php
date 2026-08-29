@@ -6,7 +6,6 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\BroadcastTelegramAlertJob;
-use App\Jobs\DispatchVoiceBriefingJob;
 use App\Models\AuditLog;
 use App\Models\EvidenceChunk;
 use App\Models\EvidenceSession;
@@ -16,7 +15,6 @@ use DateTimeInterface;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
@@ -304,84 +302,54 @@ class EvidenceSessionController extends Controller
     /**
      * Investigator override of the session risk tier (does not rewrite chunk hashes).
      */
-    public function overrideRisk(Request $request, string $sessionId): JsonResponse
+    public function overrideRiskLevel(Request $request, string $sessionId): JsonResponse
     {
         $data = $request->validate([
             'risk_level' => ['required', 'in:high,medium,low'],
-            'override_reason' => ['nullable', 'string', 'max:2000'],
             'reason' => ['nullable', 'string', 'max:2000'],
+            'override_reason' => ['nullable', 'string', 'max:2000'],
         ]);
 
-        $reason = (string) ($data['override_reason'] ?? $data['reason'] ?? 'Investigator manually overrode AI assessment.');
-
-        return $this->applyRiskOverride($request, $sessionId, $data['risk_level'], $reason);
-    }
-
-    /**
-     * Alias retained for existing clients.
-     */
-    public function overrideRiskLevel(Request $request, string $sessionId): JsonResponse
-    {
-        return $this->overrideRisk($request, $sessionId);
-    }
-
-    /**
-     * @param  'high'|'medium'|'low'  $riskLevel
-     */
-    private function applyRiskOverride(Request $request, string $sessionId, string $riskLevel, string $reason): JsonResponse
-    {
-        $session = EvidenceSession::with(['chunks' => fn ($query) => $query->orderByDesc('sequence_number')])
-            ->findOrFail($sessionId);
-
-        $session->forceFill(['risk_level' => $riskLevel])->save();
+        $reason = (string) ($data['reason'] ?? $data['override_reason'] ?? 'Investigator amended AI risk assessment.');
+        $session = EvidenceSession::query()->findOrFail($sessionId);
+        $session->update(['risk_level' => $data['risk_level']]);
 
         AuditLog::create([
             'session_id' => $session->id,
             'actor_ip' => $request->ip(),
             'user_agent' => $request->userAgent(),
-            'action' => 'risk.manually_overridden:'.$riskLevel,
+            'action' => 'risk.manually_amended',
         ]);
 
-        if ($riskLevel === 'high') {
-            $chunk = $session->chunks->first();
-
-            if ($chunk !== null) {
-                $existing = is_array($chunk->ai_threat_indicators) ? $chunk->ai_threat_indicators : [];
-                $indicators = [
-                    'weapon' => (float) ($existing['weapon'] ?? 1.0),
-                    'violence' => (float) ($existing['violence'] ?? 1.0),
-                    'acoustic_distress' => (float) ($existing['acoustic_distress'] ?? 1.0),
-                ];
-                $payload = [
-                    ...$indicators,
+        if ($data['risk_level'] === 'high') {
+            try {
+                BroadcastTelegramAlertJob::dispatch($session->fresh() ?? $session, null, [
+                    'weapon' => 1.0,
+                    'violence' => 1.0,
+                    'acoustic_distress' => 1.0,
+                    'reason' => $reason,
                     'risk_level' => 'high',
-                    'reason' => $reason !== '' ? $reason : 'Investigator manually overrode AI assessment to high.',
-                    'confidence' => 1.0,
-                    'source' => 'manual_override',
-                ];
-
-                try {
-                    BroadcastTelegramAlertJob::dispatch($session, $chunk, $payload);
-                    Bus::chain([
-                        new DispatchVoiceBriefingJob($session, $chunk, $indicators),
-                    ])
-                        ->onConnection('redis')
-                        ->onQueue('threat-analysis')
-                        ->dispatch();
-                } catch (\Throwable) {
-                    // Telegram/voice dispatch must never block the override response.
-                }
+                ]);
+            } catch (\Throwable) {
+                // Telegram dispatch must never block the override response.
             }
         }
 
         return response()->json([
-            'session_id' => $session->id,
-            'risk_level' => $session->risk_level,
-            'overridden' => true,
+            'status' => 'success',
+            'session' => $session->fresh(),
         ], Response::HTTP_OK, [
             'Cache-Control' => 'no-store, no-cache, must-revalidate, private',
             'X-WORM-Policy' => 'read-only; evidence records are immutable',
         ]);
+    }
+
+    /**
+     * Alias retained for existing clients.
+     */
+    public function overrideRisk(Request $request, string $sessionId): JsonResponse
+    {
+        return $this->overrideRiskLevel($request, $sessionId);
     }
 
     /**
@@ -438,7 +406,17 @@ class EvidenceSessionController extends Controller
         }
 
         $proxyUrl = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
-        $mediaUrl = $signedUrl ?? ($exists ? $proxyUrl : null);
+        $directUrl = null;
+
+        if ($exists) {
+            try {
+                $directUrl = $disk->url($chunk->storage_path);
+            } catch (\Throwable) {
+                $directUrl = null;
+            }
+        }
+
+        $mediaUrl = $signedUrl ?? $directUrl ?? ($exists ? $proxyUrl : null);
 
         return [
             'sequence_number' => $chunk->sequence_number,

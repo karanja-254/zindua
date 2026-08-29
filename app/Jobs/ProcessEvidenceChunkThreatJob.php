@@ -12,7 +12,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Bus;
 
 class ProcessEvidenceChunkThreatJob implements ShouldQueue
 {
@@ -98,13 +97,7 @@ class ProcessEvidenceChunkThreatJob implements ShouldQueue
         $this->escalateSessionRisk($session, 'high');
 
         try {
-            BroadcastTelegramAlertJob::dispatch($session->fresh() ?? $session, $chunk, $payload);
-            Bus::chain([
-                new DispatchVoiceBriefingJob($session, $chunk, $indicators),
-            ])
-                ->onConnection('redis')
-                ->onQueue('threat-analysis')
-                ->dispatch();
+            BroadcastTelegramAlertJob::dispatch($session->fresh() ?? $session);
         } catch (\Throwable) {
             // Queue/API failures must not unwind chunk ingest.
         }

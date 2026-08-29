@@ -36,7 +36,7 @@ Route::prefix('v1/evidence')->group(function (): void {
 
         Route::post('/{sessionId}/upload-file', [EvidenceChunkController::class, 'uploadDirectFile']);
 
-        Route::post('/{sessionId}/override-risk', [EvidenceSessionController::class, 'overrideRisk']);
+        Route::post('/{sessionId}/override-risk', [EvidenceSessionController::class, 'overrideRiskLevel']);
 
         Route::get('/{sessionId}/chunks/{sequence}/media', [EvidenceSessionController::class, 'streamChunk'])
             ->whereNumber('sequence');
@@ -46,6 +46,8 @@ Route::prefix('v1/evidence')->group(function (): void {
         Route::get('/{sessionId}/verify', [EvidenceSessionController::class, 'verifyIntegrity']);
 
         Route::get('/{sessionId}/export-package', [EvidenceSessionController::class, 'exportPackage']);
+
+        Route::get('/{sessionId}/report/pdf', [EvidenceReportController::class, 'downloadPdf']);
 
         Route::get('/{sessionId}/report', [EvidenceReportController::class, 'downloadPdf']);
 

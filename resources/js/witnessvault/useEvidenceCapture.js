@@ -347,6 +347,7 @@ export function useEvidenceCapture() {
             }
         }
         sessionIdRef.current = null;
+        return sessionId;
     }, [teardownMedia]);
 
     // Abruptly cut the client without finalizing — proves server-side preservation.

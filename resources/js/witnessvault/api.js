@@ -293,10 +293,10 @@ export async function downloadEvidencePackage(token, sessionId) {
  * @returns {Promise<void>}
  */
 export async function downloadReport(token, sessionId) {
-    const response = await fetch(`${API_BASE}/${sessionId}/report`, {
+    const response = await fetch(`${API_BASE}/${sessionId}/report/pdf`, {
         method: 'GET',
         headers: {
-            Accept: 'application/pdf',
+            Accept: 'application/pdf, application/json',
             Authorization: `Bearer ${token}`,
         },
     });
@@ -310,6 +310,11 @@ export async function downloadReport(token, sessionId) {
     const blob = await response.blob();
     if (!blob || blob.size === 0) {
         throw new Error('Forensic PDF was empty.');
+    }
+
+    const header = await blob.slice(0, 5).text();
+    if (!header.startsWith('%PDF')) {
+        throw new Error('Forensic PDF download returned HTML instead of a PDF stream.');
     }
 
     const objectUrl = window.URL.createObjectURL(blob);

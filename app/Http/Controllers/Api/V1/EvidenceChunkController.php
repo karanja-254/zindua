@@ -133,6 +133,7 @@ class EvidenceChunkController extends Controller
             $extension = preg_replace('/[^a-z0-9]/', '', $extension) ?: 'bin';
             $storagePath = sprintf('evidence/%s/%s.%s', $session->id, (string) Str::uuid(), $extension);
             $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
+            $mimeType = (string) ($uploaded->getMimeType() ?: EvidenceChunk::mimeFromExtension($extension));
 
             $contents = file_get_contents($realPath);
 
@@ -150,7 +151,7 @@ class EvidenceChunkController extends Controller
                 ], Response::HTTP_UNPROCESSABLE_ENTITY);
             }
 
-            $chunk = DB::transaction(function () use ($session, $storagePath, $chunkHash, $uploaded): EvidenceChunk {
+            $chunk = DB::transaction(function () use ($session, $storagePath, $chunkHash, $uploaded, $mimeType): EvidenceChunk {
                 $session->refresh();
 
                 $previous = EvidenceChunk::query()
@@ -170,6 +171,7 @@ class EvidenceChunkController extends Controller
                     'session_id' => $session->id,
                     'sequence_number' => $sequenceNumber,
                     'storage_path' => $storagePath,
+                    'mime_type' => $mimeType,
                     'byte_size' => (int) $uploaded->getSize(),
                     'chunk_hash' => $chunkHash,
                     'cumulative_hash' => $cumulativeHash,
@@ -231,10 +233,17 @@ class EvidenceChunkController extends Controller
         }
 
         $proxyUrl = url('/api/v1/evidence/'.$session->id.'/chunks/'.$chunk->sequence_number.'/media');
+        $directUrl = null;
+
+        try {
+            $directUrl = $disk->url($chunk->storage_path);
+        } catch (\Throwable) {
+            $directUrl = null;
+        }
 
         return [
             'signed_url' => $signedUrl,
-            'media_url' => $signedUrl ?? $proxyUrl,
+            'media_url' => $signedUrl ?? $directUrl ?? $proxyUrl,
             'mime_type' => $chunk->mimeType(),
             'file_type' => $chunk->fileType(),
         ];

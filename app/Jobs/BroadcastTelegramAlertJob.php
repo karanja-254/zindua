@@ -26,12 +26,12 @@ class BroadcastTelegramAlertJob implements ShouldQueue
     public int $timeout = 60;
 
     /**
-     * @param  array{weapon: float, violence: float, acoustic_distress: float}  $aiIndicators
+     * @param  array{weapon?: float, violence?: float, acoustic_distress?: float, reason?: string, risk_level?: string}  $aiIndicators
      */
     public function __construct(
         public readonly EvidenceSession $session,
-        public readonly EvidenceChunk $chunk,
-        public readonly array $aiIndicators,
+        public readonly ?EvidenceChunk $chunk = null,
+        public readonly array $aiIndicators = [],
     ) {
         $this->onConnection('redis')->onQueue('threat-analysis');
     }
@@ -49,7 +49,16 @@ class BroadcastTelegramAlertJob implements ShouldQueue
     public function handle(TelegramBroadcasterService $telegram): void
     {
         try {
-            $telegram->broadcastThreatAlert($this->session, $this->chunk, $this->aiIndicators);
+            $session = $this->session->fresh() ?? $this->session;
+            $session->loadMissing(['user', 'chunks']);
+            $chunk = $this->chunk ?? $session->chunks->sortByDesc('sequence_number')->first();
+            $indicators = $this->aiIndicators;
+
+            if ($indicators === [] && $chunk !== null && is_array($chunk->ai_threat_indicators)) {
+                $indicators = $chunk->ai_threat_indicators;
+            }
+
+            $telegram->broadcastThreatAlert($session, $chunk, $indicators);
         } catch (\Throwable $exception) {
             Log::error('BroadcastTelegramAlertJob swallowed a Telegram API error.', [
                 'session_id' => $this->session->id,

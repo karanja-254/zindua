@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { listSessions, getSessionDetail, downloadReport, generateMockSession, verifySession, downloadEvidencePackage, finalizeSession, uploadEvidenceFile, overrideRiskLevel, fetchAuthorizedMediaUrl } from './api';
+import { listSessions, getSessionDetail, generateMockSession, verifySession, downloadEvidencePackage, finalizeSession, uploadEvidenceFile, overrideRiskLevel, fetchAuthorizedMediaUrl } from './api';
 import GpsTimelineMap from './GpsTimelineMap';
 import { useEvidenceCapture } from './useEvidenceCapture';
 import { verifyChain } from './sha256';
@@ -82,7 +82,11 @@ function chunkPlaybackUrl(chunk) {
 }
 
 export default function EvidenceDashboard({ user }) {
-    const tokenRef = useRef(sessionStorage.getItem('vault_token'));
+    const tokenRef = useRef(
+        localStorage.getItem('pv_token')
+        || sessionStorage.getItem('pv_token')
+        || sessionStorage.getItem('vault_token'),
+    );
 
     const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'light');
     const [sessions, setSessions] = useState([]);
@@ -104,6 +108,7 @@ export default function EvidenceDashboard({ user }) {
     const [snapNote, setSnapNote] = useState(null);
     const [uploadingFile, setUploadingFile] = useState(false);
     const [overriding, setOverriding] = useState(false);
+    const [amendNotice, setAmendNotice] = useState(null);
     const capture = useEvidenceCapture();
     const captureRef = useRef(capture);
     captureRef.current = capture;
@@ -151,6 +156,8 @@ export default function EvidenceDashboard({ user }) {
     const lock = useCallback(() => {
         captureRef.current.releaseHardware();
         sessionStorage.removeItem('vault_token');
+        sessionStorage.removeItem('pv_token');
+        localStorage.removeItem('pv_token');
         window.location.reload();
     }, []);
 
@@ -262,14 +269,42 @@ export default function EvidenceDashboard({ user }) {
     }, [lock]);
 
     const handleDownloadPdf = useCallback(async (sessionId) => {
-        const token = tokenRef.current;
+        const token = localStorage.getItem('pv_token')
+            || sessionStorage.getItem('pv_token')
+            || sessionStorage.getItem('vault_token')
+            || tokenRef.current;
         if (!token) {
             lock();
             return;
         }
         setDownloading(true);
         try {
-            await downloadReport(token, sessionId);
+            const response = await fetch(`/api/v1/evidence/${sessionId}/report/pdf`, {
+                method: 'GET',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: 'application/pdf, application/json',
+                },
+            });
+
+            if (!response.ok) {
+                throw new Error(`Failed to generate PDF: ${response.statusText}`);
+            }
+
+            const blob = await response.blob();
+            const header = await blob.slice(0, 5).text();
+            if (!blob.size || !header.startsWith('%PDF')) {
+                throw new Error('Failed to fetch forensic PDF (server returned HTML or an empty payload).');
+            }
+
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `proofvault-forensic-${sessionId}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
         } catch (err) {
             setError(err.message || 'Failed to fetch forensic PDF.');
         } finally {
@@ -323,9 +358,12 @@ export default function EvidenceDashboard({ user }) {
     }, [capture, loadSessions]);
 
     const handleStopCapture = useCallback(async () => {
-        await capture.stopAndFinalize();
+        const sessionId = await capture.stopAndFinalize();
         await loadSessions();
-    }, [capture, loadSessions]);
+        if (sessionId) {
+            await openSession(sessionId);
+        }
+    }, [capture, loadSessions, openSession]);
 
     const toggleFullScreen = useCallback(() => {
         const node = viewfinderRef.current;
@@ -392,6 +430,8 @@ export default function EvidenceDashboard({ user }) {
         try {
             await overrideRiskLevel(token, detail.session.id, riskLevel, 'Investigator amended AI risk assessment.');
             await loadSessions();
+            setAmendNotice(`Risk assessment amended to ${riskLevel.toUpperCase()}.`);
+            setTimeout(() => setAmendNotice(null), 4000);
         } catch (err) {
             setDetail((prev) => (prev ? { ...prev, session: { ...prev.session, risk_level: previous } } : prev));
             setError(err.message);
@@ -819,27 +859,30 @@ export default function EvidenceDashboard({ user }) {
                                         );
                                     }
                                     if (kind === 'image') {
-                                        return <img src={activeChunk.media_url || src} alt="Evidence" className="h-full max-h-[420px] w-full object-contain" />;
+                                        return <img src={activeChunk.media_url || src} alt="Preserved Evidence" className="w-full max-h-[420px] rounded object-contain bg-black/40" />;
                                     }
                                     if (kind === 'audio') {
                                         return (
-                                            <audio
-                                                key={activeChunk.sequence_number}
-                                                src={activeChunk.media_url || src}
-                                                controls
-                                                autoPlay={continuousPlayback}
-                                                onEnded={playNextChunk}
-                                                className="my-auto w-full p-4"
-                                            />
+                                            <div className="flex flex-col items-center justify-center rounded bg-zinc-900 p-8">
+                                                <p className="mb-4 text-sm text-zinc-400">🎵 Audio Evidence Track</p>
+                                                <audio
+                                                    key={activeChunk.sequence_number}
+                                                    src={activeChunk.media_url || src}
+                                                    controls
+                                                    autoPlay={continuousPlayback}
+                                                    onEnded={playNextChunk}
+                                                    className="w-full"
+                                                />
+                                            </div>
                                         );
                                     }
                                     if (kind === 'document') {
                                         const docSrc = activeChunk.media_url || src;
                                         return (
-                                            <div className="bg-white">
-                                                <iframe title="Evidence document" src={docSrc} className="h-[420px] w-full" />
-                                                <a href={docSrc} target="_blank" rel="noreferrer" className="block px-4 py-2 text-center text-sm font-bold text-emerald-700">
-                                                    📥 View Full Document
+                                            <div className="flex h-[450px] w-full flex-col">
+                                                <iframe title="Evidence document" src={docSrc} className="w-full flex-1 rounded border border-zinc-700" />
+                                                <a href={docSrc} target="_blank" rel="noreferrer" className="mt-2 text-xs text-blue-400 underline">
+                                                    Open Document in New Tab ↗
                                                 </a>
                                             </div>
                                         );
@@ -852,7 +895,7 @@ export default function EvidenceDashboard({ user }) {
                                                 controls
                                                 autoPlay
                                                 onEnded={playNextChunk}
-                                                className="h-full w-full object-contain"
+                                                className="w-full max-h-[420px] rounded bg-black object-contain"
                                             />
                                             {continuousPlayback && chunkPlaybackUrl(nextPlayable) ? (
                                                 <video src={chunkPlaybackUrl(nextPlayable)} preload="auto" className="hidden" />
@@ -895,7 +938,12 @@ export default function EvidenceDashboard({ user }) {
                                     </div>
                                 )}
                                 <div className="mt-4 space-y-2">
-                                    <p className="text-xs font-black uppercase tracking-wide">⚙️ Amend Risk Level</p>
+                                    <p className="text-xs font-black uppercase tracking-wide">⚠️ Amend Risk Assessment</p>
+                                    {amendNotice && (
+                                        <p className="rounded-lg bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                                            {amendNotice}
+                                        </p>
+                                    )}
                                     <div className="flex flex-wrap gap-2">
                                         <button
                                             type="button"

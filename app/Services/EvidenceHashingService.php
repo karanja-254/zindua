@@ -62,7 +62,7 @@ class EvidenceHashingService
 
                 $extension = $this->sanitizeExtension((string) ($metadata['extension'] ?? 'bin'));
                 $storagePath = sprintf('evidence/%s/chunks/%010d.%s', $session->id, $sequenceNumber, $extension);
-                $disk = Storage::disk((string) config('filesystems.evidence_disk', 's3'));
+                $disk = Storage::disk((string) config('filesystems.evidence_disk', 'r2'));
 
                 $handle = fopen($temporaryPath, 'rb');
 
@@ -84,6 +84,7 @@ class EvidenceHashingService
                     'session_id' => $session->id,
                     'sequence_number' => $sequenceNumber,
                     'storage_path' => $storagePath,
+                    'mime_type' => EvidenceChunk::mimeFromExtension($extension),
                     'byte_size' => $byteSize,
                     'chunk_hash' => $chunkHash,
                     'cumulative_hash' => $cumulativeHash,

@@ -28,12 +28,12 @@ class TelegramBroadcasterService
      * @param  array{weapon: float, violence: float, acoustic_distress: float}  $aiIndicators
      * @return array<string, bool>  Map of channel id => delivery success.
      */
-    public function broadcastThreatAlert(EvidenceSession $session, EvidenceChunk $chunk, array $aiIndicators): array
+    public function broadcastThreatAlert(EvidenceSession $session, ?EvidenceChunk $chunk, array $aiIndicators): array
     {
         $channels = $this->resolveChannels();
 
         if ($channels === []) {
-            Log::info('Telegram broadcast skipped: TELEGRAM_ALERT_CHANNELS is empty or unset.', [
+            Log::info('Telegram broadcast skipped: no channel_id or TELEGRAM_ALERT_CHANNELS configured.', [
                 'session_id' => $session->id,
             ]);
 
@@ -181,6 +181,57 @@ class TelegramBroadcasterService
     }
 
     /**
+     * Send an arbitrary Telegram message without failing the caller on API errors.
+     */
+    public function sendMessage(int|string $chatId, string $text, ?string $parseMode = 'Markdown'): bool
+    {
+        $token = $this->resolveBotToken();
+
+        if ($token === null) {
+            Log::info('Telegram sendMessage skipped: TELEGRAM_BOT_TOKEN is empty or unset.', [
+                'chat_id' => $chatId,
+            ]);
+
+            return false;
+        }
+
+        $payload = [
+            'chat_id' => $chatId,
+            'text' => $text,
+            'disable_web_page_preview' => false,
+        ];
+
+        if ($parseMode !== null && $parseMode !== '') {
+            $payload['parse_mode'] = $parseMode;
+        }
+
+        try {
+            $response = Http::asJson()
+                ->timeout(15)
+                ->post(sprintf('%s/bot%s/sendMessage', self::API_BASE, $token), $payload);
+        } catch (\Throwable $exception) {
+            Log::error('Telegram sendMessage failed.', [
+                'chat_id' => $chatId,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        if ($response->failed()) {
+            Log::error('Telegram sendMessage failed.', [
+                'chat_id' => $chatId,
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * Reply to /test or /status with live vault operational counts.
      */
     public function replyOperationalStatus(string $chatId): bool
@@ -276,46 +327,50 @@ class TelegramBroadcasterService
      *
      * @param  array{weapon?: float, violence?: float, acoustic_distress?: float, reason?: string, risk_level?: string}  $aiIndicators
      */
-    private function buildMessage(EvidenceSession $session, EvidenceChunk $chunk, array $aiIndicators): string
+    private function buildMessage(EvidenceSession $session, ?EvidenceChunk $chunk, array $aiIndicators): string
     {
         $evidenceId = $session->evidenceId();
-        $pin = $this->buildGpsPin($chunk);
-        $lat = $chunk->latitude;
-        $lng = $chunk->longitude;
-        $locationLabel = ($lat !== null && $lng !== null)
-            ? sprintf('Nairobi (%s, %s)', $lat, $lng)
-            : 'Location unavailable';
-
+        $portal = 'https://vault.karanja.online';
         $weapon = $this->asPercent((float) ($aiIndicators['weapon'] ?? 0));
+        $violence = $this->asPercent((float) ($aiIndicators['violence'] ?? 0));
         $distress = $this->asPercent((float) ($aiIndicators['acoustic_distress'] ?? 0));
         $reason = (string) ($aiIndicators['reason'] ?? 'High-risk multi-modal indicators detected.');
-
-        $reviewUrl = rtrim((string) config('app.url'), '/').'/vault';
-        $reportUrl = rtrim((string) config('app.url'), '/').'/api/v1/evidence/'.$session->id.'/report';
-
-        $locationLine = $pin !== null
-            ? '📍 *Location:* ['.$this->escape($locationLabel).']('.$pin.')'
-            : '📍 *Location:* '.$this->escape($locationLabel);
+        $capturedAt = ($chunk?->captured_at !== null)
+            ? $chunk->captured_at->timezone('Africa/Nairobi')->format('Y-m-d H:i:s').' EAT'
+            : now()->timezone('Africa/Nairobi')->format('Y-m-d H:i:s').' EAT';
 
         $session->loadMissing('user');
         $userName = $session->user?->name ?: 'Unknown investigator';
 
+        $locationLine = '📍 *Location:* Location unavailable';
+        if ($chunk !== null) {
+            $pin = $this->buildGpsPin($chunk);
+            $lat = $chunk->latitude;
+            $lng = $chunk->longitude;
+            $locationLabel = ($lat !== null && $lng !== null)
+                ? sprintf('Nairobi (%s, %s)', $lat, $lng)
+                : 'Location unavailable';
+            $locationLine = $pin !== null
+                ? '📍 *Location:* ['.$this->escape($locationLabel).']('.$pin.')'
+                : '📍 *Location:* '.$this->escape($locationLabel);
+        }
+
         $lines = [
-            '🔴 *HIGH\\-RISK INCIDENT DETECTED*',
+            '🔴 *HIGH RISK THREAT DETECTED*',
             '',
             '*Evidence ID:* `'.$this->escape($evidenceId).'`',
             '*Session:* `'.$this->escape((string) $session->id).'`',
+            '🕒 *Timestamp:* '.$this->escape($capturedAt),
             '👤 *Preserved by:* '.$this->escape($userName),
             $locationLine,
             '',
-            '*AI Indicators & Confidence:*',
-            $this->escape(sprintf('Apparent weapon (%s), acoustic distress (%s)', $weapon, $distress)),
+            '*Detected threat factors:*',
+            $this->escape(sprintf('Weapon: %s, Violence: %s, Distress: %s', $weapon, $violence, $distress)),
             $this->escape($reason),
             '',
-            '🔐 *Chain Hash:* `'.$this->escape((string) $chunk->cumulative_hash).'`',
+            '🔐 *Chain Hash:* `'.$this->escape((string) ($chunk?->cumulative_hash ?? $session->chain_hash ?? '')).'`',
             '',
-            '['.$this->escape('Open review console').']('.$reviewUrl.')',
-            '['.$this->escape('Download Chain-of-Custody PDF').']('.$reportUrl.')',
+            '['.$this->escape('Open secure portal').']('.$portal.')',
         ];
 
         return implode("\n", $lines);

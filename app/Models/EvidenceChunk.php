@@ -18,6 +18,7 @@ class EvidenceChunk extends Model
         'session_id',
         'sequence_number',
         'storage_path',
+        'mime_type',
         'byte_size',
         'chunk_hash',
         'cumulative_hash',
@@ -55,13 +56,22 @@ class EvidenceChunk extends Model
     }
 
     /**
-     * MIME type inferred from the stored object extension.
+     * MIME type persisted at ingest, falling back to the stored object extension.
      */
     public function mimeType(): string
     {
-        $extension = strtolower(pathinfo((string) $this->storage_path, PATHINFO_EXTENSION));
+        $stored = trim((string) ($this->mime_type ?? ''));
 
-        return match ($extension) {
+        if ($stored !== '') {
+            return $stored;
+        }
+
+        return self::mimeFromExtension(strtolower(pathinfo((string) $this->storage_path, PATHINFO_EXTENSION)));
+    }
+
+    public static function mimeFromExtension(string $extension): string
+    {
+        return match (strtolower($extension)) {
             'jpg', 'jpeg' => 'image/jpeg',
             'png' => 'image/png',
             'webp' => 'image/webp',
