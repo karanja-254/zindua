@@ -1,59 +1,415 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# ProofVault (WitnessVault)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Tamper-evident emergency evidence capture system. Investigators unlock a vault with a master keycode, stream video/audio/photos into an append-only SHA-256 hash chain, and review sessions with GPS trails, AI risk scoring, and chain-of-custody exports.
 
-## About Laravel
+Built with **Laravel 12**, **React 19**, **Vite 7**, and **Tailwind CSS 4**.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Table of contents
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+1. [What it does](#what-it-does)
+2. [Stack](#stack)
+3. [Requirements](#requirements)
+4. [Local setup](#local-setup)
+5. [Running the app](#running-the-app)
+6. [Authentication](#authentication)
+7. [Core concepts](#core-concepts)
+8. [API reference](#api-reference)
+9. [Frontend](#frontend)
+10. [Background jobs and integrations](#background-jobs-and-integrations)
+11. [Database](#database)
+12. [Environment variables](#environment-variables)
+13. [Artisan commands](#artisan-commands)
+14. [Testing](#testing)
+15. [Docker / Render deployment](#docker--render-deployment)
+16. [Project layout](#project-layout)
+17. [Known local gotchas](#known-local-gotchas)
 
-## Learning Laravel
+---
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## What it does
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+ProofVault preserves media evidence so it cannot be quietly altered after capture.
 
-## Laravel Sponsors
+- **Capture** — browser MediaRecorder streams video or audio in ~3s chunks, or one-shot photos / file uploads
+- **Hash chain** — each chunk gets `SHA-256(bytes)` and `SHA-256(previous_cumulative + chunk_hash)`, starting from a 64-zero genesis hash
+- **WORM policy** — PUT / PATCH / DELETE on evidence routes return 403; finalized sessions reject new chunks
+- **GPS** — lat/lng/accuracy attached per chunk; Leaflet map shows the trail
+- **AI risk** — Gemini (or local heuristic fallback) scores weapon / violence / acoustic distress
+- **Alerts** — high risk can fan out to Telegram, ElevenLabs voice notes, and SMS (Africa's Talking or Twilio)
+- **Exports** — forensic PDF (DomPDF) and ZIP package (`report.pdf`, `ledger.json`, `hashes.txt`, optional stitched MP4)
+- **Cover UI** — login screen is styled as “Fruit Ninja Dojo”; after unlock it becomes the ProofVault control room
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+Public routes: `/` and `/vault` both render the vault SPA.
 
-### Premium Partners
+---
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+## Stack
 
-## Contributing
+| Layer | Technology |
+|-------|------------|
+| Backend | PHP 8.2+, Laravel 12, Sanctum |
+| Frontend | React 19, Vite, Tailwind 4, Leaflet |
+| Local DB | SQLite (`database/database.sqlite`) |
+| Production DB | MySQL (see `render.yaml`) |
+| Queues / cache (prod) | Redis |
+| Evidence storage | Local disk, Cloudflare R2, or S3 |
+| PDF | barryvdh/laravel-dompdf |
+| Optional AI / alerts | Gemini, Telegram, ElevenLabs, Africa's Talking / Twilio |
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+---
 
-## Code of Conduct
+## Requirements
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+- PHP 8.2+ with `pdo_sqlite` (local) or `pdo_mysql` (prod)
+- Composer 2
+- Node.js 18+ and npm
+- Recommended PHP extensions: `zip`, `intl`, `gd` (enable in `php.ini` on XAMPP if missing)
+- Optional: Redis, ffmpeg (frame extraction + MP4 stitch), API keys for Gemini / Telegram / ElevenLabs / SMS
 
-## Security Vulnerabilities
+---
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## Local setup
+
+From the project root:
+
+```powershell
+composer install
+Copy-Item .env.example .env
+php artisan key:generate
+New-Item -ItemType File database\database.sqlite -Force
+```
+
+Edit `.env` and set:
+
+```env
+DB_CONNECTION=sqlite
+EVIDENCE_DISK=local
+```
+
+`EVIDENCE_DISK=r2` without R2 credentials will throw on every upload (`r2` disk has `'throw' => true`).
+
+Then:
+
+```powershell
+php artisan migrate
+php artisan vault:set-master-key Kenya123
+npm install
+npm run build
+```
+
+Default investigator after `vault:set-master-key`:
+
+- Email: `admin@witnessvault.test`
+- Master keycode: whatever you passed (example above: `Kenya123`)
+
+---
+
+## Running the app
+
+**Two terminals (recommended on Windows):**
+
+```powershell
+php artisan serve
+```
+
+```powershell
+npm run dev
+```
+
+Open http://localhost:8000 and unlock with the master keycode.
+
+If you already ran `npm run build`, Vite is optional; `php artisan serve` alone serves compiled assets from `public/build`.
+
+**Do not use `composer run dev` on Windows.** That script starts `php artisan pail`, which needs `pcntl`/`posix` and will kill the whole concurrently group.
+
+**Optional Redis worker** (threat analysis / Telegram / voice):
+
+```powershell
+# .env: REDIS_CLIENT=predis  (no phpredis needed if predis is installed)
+php artisan queue:work redis --queue=threat-analysis,default
+```
+
+Threat jobs hardcode `->onConnection('redis')`. Without Redis they fail quietly (dispatch is wrapped in try/catch); uploads still succeed.
+
+---
+
+## Authentication
+
+### Master keycode (primary UI flow)
+
+| Method | Path | Body |
+|--------|------|------|
+| POST | `/api/v1/auth/unlock` | `{ "keycode": "..." }` |
+| POST | `/api/v1/auth/register` | `{ "name": "...", "keycode": "..." }` |
+
+Returns Sanctum bearer token + user. Token is stored in `sessionStorage` as `vault_token`.
+
+Register creates a user with a synthetic `@proofvault.local` email and a bcrypt `master_key_hash`. Keycodes must be unique across users.
+
+### Email / password (API)
+
+| Method | Path | Body |
+|--------|------|------|
+| POST | `/api/v1/auth/login` | `{ "email", "password" }` |
+
+### CLI helpers
+
+```powershell
+php artisan vault:set-master-key Kenya123
+php artisan vault:create-user --email=you@example.com --password=Secret123!
+```
+
+Dashboard auto-locks after 60 seconds of inactivity (timer paused while recording).
+
+---
+
+## Core concepts
+
+### Evidence session
+
+UUID primary key. Status: `active` | `finalized` | `interrupted`. Risk: `unassessed` | `low` | `medium` | `high`.
+
+Human ID: `PV-YYYYMMDD-XXXX` via `EvidenceSession::evidenceId()` (Africa/Nairobi date).
+
+### Hash chain
+
+```
+GENESIS = 64 zero hex chars
+chunk_hash       = SHA-256(raw bytes)
+cumulative_hash  = SHA-256(previous_cumulative + chunk_hash)
+session.chain_hash = tip of the chain
+```
+
+Ingest streams `php://input` in 8KB buffers so large clips are not held fully in memory (`EvidenceHashingService`).
+
+### WORM
+
+- Append only while `status === active`
+- Finalize seals the session
+- Any PUT/PATCH/DELETE under `/api/v1/evidence/*` returns 403 with a WORM message
+
+### Public ingest rate limit
+
+`POST /api/v1/evidence/session/start` is limited to **4 requests per day per IP** (`emergency-ingest`). Authenticated `POST /api/v1/evidence/session` is not throttled that way.
+
+---
+
+## API reference
+
+Base: `/api/v1`
+
+### Auth
+
+- `POST /auth/login`
+- `POST /auth/unlock`
+- `POST /auth/register`
+
+### Evidence (public ingest)
+
+- `POST /evidence/session/start` — start session (throttled)
+- `POST /evidence/{sessionId}/chunk` — raw body + headers:
+  - `Content-Type`, optional `X-Chunk-Ext`
+  - `X-Captured-At`, `X-Geo-Lat`, `X-Geo-Lng`, `X-Geo-Accuracy`
+- `POST /evidence/{sessionId}/finalize`
+
+### Evidence (Sanctum)
+
+- `GET /evidence` — paginated list + stats
+- `POST /evidence/mock` — fake high-risk session for UI demos
+- `POST /evidence/session` — authenticated start
+- `POST /evidence/{sessionId}/upload-file` — multipart file (max 50MB); use `sessionId=new` to create a session
+- `POST /evidence/{sessionId}/override-risk` — `{ "risk_level": "high|medium|low", "reason?" }`
+- `GET /evidence/{sessionId}` — metadata + chunks + signed/media URLs
+- `GET /evidence/{sessionId}/chunks/{sequence}/media` — authenticated stream
+- `GET /evidence/{sessionId}/playback` — playback manifest
+- `GET /evidence/{sessionId}/verify` — integrity verdict (`VERIFIED` or `TAMPER_DETECTED` + 422)
+- `GET /evidence/{sessionId}/report` — PDF download
+- `GET /evidence/{sessionId}/export-package` — ZIP download
+
+Send `Authorization: Bearer {token}` on Sanctum routes.
+
+---
+
+## Frontend
+
+Entry: `resources/js/witnessvault/main.jsx` → `ProofVaultApp` → `EvidenceDashboard`.
+
+| Module | Role |
+|--------|------|
+| `ProofVaultApp.jsx` | Cover / unlock / register keyboard UI |
+| `EvidenceDashboard.jsx` | Sessions, capture, verify, export, risk override |
+| `useEvidenceCapture.js` | MediaRecorder, GPS, offline queue drain |
+| `offlineQueue.js` | IndexedDB queue when offline / upload fails |
+| `api.js` | Fetch helpers |
+| `sha256.js` | Client-side chain verify |
+| `GpsTimelineMap.jsx` | Leaflet OpenStreetMap trail |
+
+Capture modes: video stream, audio-only, snapshot photo, file upload. “Simulate Phone Seizure” tears down the client without finalize so server-held chunks remain.
+
+---
+
+## Background jobs and integrations
+
+All threat jobs use Redis queue `threat-analysis`.
+
+| Job | Purpose |
+|-----|---------|
+| `ProcessEvidenceChunkThreatJob` | Gemini or heuristic scoring; escalate session risk; chain Telegram + voice on **high** |
+| `BroadcastTelegramAlertJob` | MarkdownV2 alert to `TELEGRAM_ALERT_CHANNELS` |
+| `DispatchVoiceBriefingJob` | ElevenLabs MP3 → Telegram voice note |
+| `DispatchSmsAlertJob` | SMS with GPS + one-time access code (service exists; not currently chained from the threat job) |
+
+**Gemini** (`GEMINI_API_KEY`): vision on image or ffmpeg-extracted video frame. Without key/ffmpeg, heuristic scores are derived from the chunk hash.
+
+**SMS**: `SMS_DRIVER=africastalking` (default) or `twilio`; recipients in `SMS_EMERGENCY_RECIPIENTS` (comma-separated).
+
+**Evidence disk**: production Render blueprint uses S3; local should use `local`. Briefings currently write via `Storage::disk('s3')` in ElevenLabs/Telegram voice helpers — configure AWS/S3 vars if you need that path.
+
+---
+
+## Database
+
+**Local:** SQLite file `database/database.sqlite`.
+
+**Production:** MySQL (`DB_CONNECTION=mysql` in `render.yaml`).
+
+### App tables
+
+- `users` — includes nullable email, `master_key_hash`
+- `personal_access_tokens` — Sanctum
+- `evidence_sessions`
+- `evidence_chunks` — unique `(session_id, sequence_number)`, GPS, hashes, `ai_threat_indicators` JSON
+- `audit_logs` — `session.started`, `chunk.ingested`, `report.generated`, etc.
+- Plus Laravel cache / jobs / sessions tables as migrated
+
+---
+
+## Environment variables
+
+Copy from `.env.example`. Important keys:
+
+```env
+APP_KEY=
+APP_URL=http://localhost:8000
+
+DB_CONNECTION=sqlite
+# or mysql + DB_HOST / DB_DATABASE / DB_USERNAME / DB_PASSWORD
+
+EVIDENCE_DISK=local          # local | r2 | s3
+QUEUE_CONNECTION=database    # prod often redis
+CACHE_STORE=database
+SESSION_DRIVER=database
+
+# R2
+CLOUDFLARE_R2_ACCESS_KEY_ID=
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=
+CLOUDFLARE_R2_BUCKET=
+CLOUDFLARE_R2_ENDPOINT=
+
+# S3
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_DEFAULT_REGION=
+AWS_BUCKET=
+
+# Alerts / AI
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALERT_CHANNELS=
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
+GEMINI_API_KEY=
+FFMPEG_PATH=
+SMS_DRIVER=africastalking
+SMS_EMERGENCY_RECIPIENTS=
+AFRICASTALKING_USERNAME=
+AFRICASTALKING_API_KEY=
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_FROM=
+
+REDIS_CLIENT=predis
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+```
+
+---
+
+## Artisan commands
+
+| Command | Description |
+|---------|-------------|
+| `php artisan migrate` | Run migrations |
+| `php artisan vault:set-master-key {key}` | Set investigator master key (default arg `Kenya123`) |
+| `php artisan vault:create-user` | Create/update user + print Sanctum token |
+| `php artisan serve` | Dev HTTP server |
+| `php artisan queue:work redis --queue=threat-analysis,default` | Process alert/AI jobs |
+| `php artisan test` | Run PHPUnit |
+
+---
+
+## Testing
+
+```powershell
+php artisan test
+```
+
+Feature coverage in `tests/Feature/ProofVaultSecurityTest.php`:
+
+- Intact hash chain → `VERIFIED`
+- Corrupted intermediate chunk → `TAMPER_DETECTED` (422)
+- PUT/PATCH/DELETE → 403 WORM
+
+PHPUnit forces SQLite in-memory, `EVIDENCE_DISK=local`, `QUEUE_CONNECTION=sync`.
+
+---
+
+## Docker / Render deployment
+
+- `Dockerfile` — PHP 8.3-FPM Alpine, Nginx, Supervisor, Composer vendor stage
+- `docker/entrypoint.sh` — config/route/view cache + `migrate --force`
+- `docker/nginx.conf` — port 8080, `client_max_body_size 100M`
+- `render.yaml` — web service, Redis worker (`queue:work redis --queue=threat-analysis,default`), Redis instance, MySQL + S3 env wired via dashboard secrets
+
+Health check: `GET /up`.
+
+---
+
+## Project layout
+
+```
+app/
+  Console/Commands/     vault:set-master-key, vault:create-user
+  Http/Controllers/Api/V1/   Auth, MasterKey, EvidenceSession, EvidenceChunk
+  Jobs/                 threat analysis + Telegram / voice / SMS
+  Models/               User, EvidenceSession, EvidenceChunk, AuditLog
+  Services/             hashing, forensic PDF/ZIP, Gemini, Telegram, SMS, ElevenLabs, media
+database/migrations/
+resources/
+  js/witnessvault/      React SPA
+  views/vault.blade.php
+  views/reports/forensic.blade.php
+routes/api.php
+routes/web.php
+docker/
+render.yaml
+```
+
+---
+
+## Known local gotchas
+
+1. Set `EVIDENCE_DISK=local` or uploads fail against empty R2 config.
+2. Skip `composer run dev` on Windows (Pail / pcntl).
+3. Enable `extension=zip` for ZIP exports (`ZipArchive`).
+4. Enable `extension=intl` if `php artisan db:show` complains.
+5. Threat / Telegram / voice need Redis + keys; capture still works without them.
+6. Public `session/start` is capped at 4/day/IP; use authenticated session start from the UI.
+7. Mock sessions create ledger rows without binary files — player will say no stream stored.
+
+---
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+MIT (Laravel skeleton base). Application code in this repository follows the same terms unless otherwise noted.
