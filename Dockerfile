@@ -1,6 +1,5 @@
 # WitnessVault — Laravel 12 backend container for Render
-# Multi-stage: build PHP deps with Composer, then run under PHP-FPM + Nginx via a
-# lightweight process manager.
+# Multi-stage: Composer vendor, Vite frontend assets, then PHP-FPM + Nginx.
 
 FROM composer:2 AS vendor
 WORKDIR /app
@@ -12,6 +11,14 @@ RUN composer install \
     --no-scripts \
     --no-autoloader \
     --ignore-platform-reqs
+
+FROM node:20-alpine AS node_builder
+WORKDIR /app
+COPY package.json package-lock.json vite.config.js ./
+COPY resources ./resources
+RUN mkdir -p public \
+    && npm ci \
+    && npm run build
 
 FROM php:8.3-fpm-alpine AS app
 
@@ -45,11 +52,13 @@ RUN chmod +x /usr/local/bin/composer
 # Application source + pre-resolved vendor directory.
 COPY . .
 COPY --from=vendor /app/vendor ./vendor
+COPY --from=node_builder /app/public/build /var/www/html/public/build
 
 # Regenerate the optimized autoloader now that the full source tree is present.
 RUN composer dump-autoload --no-dev --optimize --classmap-authoritative \
-    && chown -R www-data:www-data storage bootstrap/cache \
-    && chmod -R 775 storage bootstrap/cache
+    && chown -R www-data:www-data storage bootstrap/cache /var/www/html/public/build \
+    && chmod -R 775 storage bootstrap/cache \
+    && chmod -R 755 /var/www/html/public/build
 
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
