@@ -1,6 +1,26 @@
 # ProofVault (WitnessVault)
+# Tamper-Evident Emergency Evidence Capture System
+A secure field tool for investigators to record and preserve evidence in a way that can't be quietly altered after the fact.
 
-Tamper-evident emergency evidence capture system. Investigators unlock a vault with a master keycode, stream video/audio/photos into an append-only SHA-256 hash chain, and review sessions with GPS trails, AI risk scoring, and chain-of-custody exports.
+# Access & security
+
+An investigator authenticates by unlocking a secure "vault" with a master keycode, gating who can capture or view evidence.
+# Capture
+
+Once unlocked, they stream video, audio, and photos directly into the vault.
+Every new piece of media is written to an append-only log nothing can be edited or deleted, only added.
+# Tamper evidence (the core guarantee)
+
+Each entry is fingerprinted with SHA-256 and cryptographically linked to the previous entry, forming a hash chain. If any file or record is changed after capture, the chain breaks and the tampering becomes provable.
+# Context & intelligence
+
+Captures are tagged with GPS coordinates, building a location trail of where evidence was collected and when.
+An AI risk-scoring layer flags each session or item by threat/severity level to help prioritize review.
+# Review & handoff
+
+Investigators can replay a full session — media, timestamps, GPS path, and risk scores together.
+The system generates chain-of-custody exports: verifiable reports proving who captured what, when, where, and that the evidence is intact — suitable for legal/audit use.
+
 
 Built with **Laravel 12**, **React 19**, **Vite 7**, and **Tailwind CSS 4**.
 
