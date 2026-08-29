@@ -39,7 +39,7 @@ ProofVault preserves media evidence so it cannot be quietly altered after captur
 - **AI risk** — Gemini (or local heuristic fallback) scores weapon / violence / acoustic distress
 - **Alerts** — high risk can fan out to Telegram, ElevenLabs voice notes, and SMS (Africa's Talking or Twilio)
 - **Exports** — forensic PDF (DomPDF) and ZIP package (`report.pdf`, `ledger.json`, `hashes.txt`, optional stitched MP4)
-- **Cover UI** — login screen is styled as “Fruit Ninja Dojo”; after unlock it becomes the ProofVault control room
+- **Cover UI** — login screen is styled as “Fruit Ninja Dojo”; after unlock it becomes the ProofVault control room.
 
 Public routes: `/` and `/vault` both render the vault SPA.
 
