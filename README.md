@@ -4,7 +4,7 @@ A secure field tool for investigators to record and preserve evidence in a way t
 
 # Access & security
 
-An investigator authenticates by unlocking a secure "vault" with a master keycode, gating who can capture or view evidence.
+An investigator authenticates by unlocking a secure "vault" with a master keycode, gating who can capture or view evidences.
 # Capture
 
 Once unlocked, they stream video, audio, and photos directly into the vault.
